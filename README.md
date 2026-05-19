@@ -70,7 +70,7 @@ A desktop network reconnaissance tool built on Tauri 2 + React + Rust. AegisMap 
 | **Workflow status** | DISC → ENUM → TESTED → VULN → MITIG — track pentesting progress per host (reflected in 3D node glow) |
 | **PDF report** | `Ctrl+P` or PDF button — executive summary with risk metrics, per-host CVE summary, confidence percentage, and professional print layout |
 | **Screenshot** | Capture button saves the full 3D canvas including host labels and port tooltips |
-| **Tamper-evident audit log** | HMAC integrity chain — each entry hashes the previous entry's hash using djb2-extended (16-hex-char hashes). Verify button checks chain integrity; tampered or deleted entries detected and flagged |
+| **SHA-256 chained integrity log** | Each entry includes the SHA-256 digest of the previous entry, forming a sequential chain. Modifications, insertions, or deletions that break the chain are detected on verification. Verify button checks the full chain and flags broken entries by index. |
 | **Scan age + staleness** | Relative age per host; amber warning after 10 minutes |
 
 ### UI / UX
@@ -206,7 +206,7 @@ All privileged profiles are pre-flight checked before nmap spawns — no silent 
 - **Input allowlist** — targets validated against a character allowlist (no `;`, `|`, `` ` ``, `$`, newlines, flag prefixes). Port ranges: digits/commas/hyphens only. Decoys: IPv4/IPv6/ME/RND only. Timing: 0–4 only. NSE scripts: exact allowlist match.
 - **Fixed profiles** — the frontend sends a profile enum variant; backend constructs the argument list. Raw nmap flags are never accepted from the UI.
 - **NSE allowlist** — 14 curated read-only scripts hardcoded in Rust; arbitrary script names are rejected.
-- **Tamper-evident audit log** — HMAC integrity chain using djb2-extended hashing; chain verification detects any tampered or deleted entries.
+- **Chained integrity audit log** — SHA-256 hash chain; each entry commits to all prior entries. Detects structural modifications (field changes, insertion, deletion). Does not use a secret key; a determined local actor with direct localStorage access can recompute the chain. Suitable for detecting accidental or unsophisticated tampering, not forensic-grade evidence.
 - **Path-traversal-safe persistence** — session IDs sanitised to alphanumeric, hyphens, and underscores only (max 128 chars); sessions always written inside the platform app-data directory.
 - **Import sanitisation** — deep schema guard on imported host data; HTML tags, control characters, `javascript:` protocol, and event-handler attributes all stripped.
 - **Static advisories** — CVE database and version hints are local static tables. AegisMap makes zero outbound network requests.

@@ -117,6 +117,34 @@ Explicitly denied (belt-and-suspenders over the default-deny posture):
 
 ---
 
+## Audit Log Chain Integrity
+
+The audit log uses a **SHA-256 hash chain**: each entry's hash commits to the
+previous entry's hash plus all fields of the current entry. Verification
+recomputes the chain and flags any entry where the stored hash does not match.
+
+**What the chain detects:**
+- Modification of any field (timestamp, action, details) in any stored entry
+- Deletion of entries (shifts hashes, breaks chain at the deletion point)
+- Insertion of entries (inserted entry has wrong hash)
+
+**What the chain does NOT protect against:**
+- A local actor with direct access to `localStorage` who knows the algorithm
+  (it is open source) — they can recompute the entire chain after any change.
+- Concurrent modification by another app process sharing the same browser origin.
+- Browser cache clear or deliberate storage deletion.
+
+**Appropriate use:** The audit log is designed to detect accidental corruption
+and unsophisticated tampering in a trusted-device context. It is **not**
+forensic-grade evidence and should not be described as "tamper-proof."
+
+**Previous version:** The chain previously used a djb2-extended hash (a fast
+non-cryptographic hash designed for hash tables, not integrity verification) and
+was incorrectly described as "HMAC". Existing v1 logs are automatically re-signed
+with SHA-256 on first verification after upgrade.
+
+---
+
 ## Items Intentionally Excluded from All Profiles
 
 | Blocked feature | Reason |
