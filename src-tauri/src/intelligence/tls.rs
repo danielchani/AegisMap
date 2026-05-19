@@ -23,6 +23,12 @@ pub struct TlsProbeRequest {
     pub timeout_secs: u8,
     /// Accept self-signed / expired certificates — on by default for pentest use.
     pub accept_invalid_certs: bool,
+    /// Optional hostname to use as the TLS SNI (Server Name Indication) value.
+    /// When probing an IP address, set this to the known hostname so the server
+    /// presents the correct certificate for the vhost. The TCP connection still
+    /// goes to `address`; only the TLS ClientHello server_name extension changes.
+    #[serde(default)]
+    pub sni_override: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,15 +143,31 @@ pub async fn probe(req: TlsProbeRequest) -> TlsProbeResult {
     let probed_at = Utc::now().to_rfc3339();
     let timeout_dur = Duration::from_secs(req.timeout_secs as u64);
 
-    // Build the server name — handles both IP addresses and hostnames.
-    let server_name: ServerName<'static> = if let Ok(ip) = req.address.parse::<IpAddr>() {
-        ServerName::IpAddress(ip.into())
+    // Build the TLS server name (SNI).
+    // Prefer sni_override (e.g. the known hostname from Nmap) over the raw address so
+    // that virtual-hosted TLS servers present the correct certificate.
+    // The TCP connection always goes to `address`; only the TLS ClientHello SNI changes.
+    let sni_source = req.sni_override.as_deref().unwrap_or(req.address.as_str());
+    let server_name: ServerName<'static> = if req.sni_override.is_none() {
+        // No override — fall back to address, which may be an IP.
+        if let Ok(ip) = req.address.parse::<IpAddr>() {
+            ServerName::IpAddress(ip.into())
+        } else {
+            match ServerName::try_from(req.address.as_str()) {
+                Ok(sn) => sn.to_owned(),
+                Err(e) => {
+                    return error_result(&req.address, req.port, &probed_at,
+                        format!("invalid server name: {e}"));
+                }
+            }
+        }
     } else {
-        match ServerName::try_from(req.address.as_str()) {
+        // Use the provided hostname as SNI — must be a DNS name, not an IP.
+        match ServerName::try_from(sni_source) {
             Ok(sn) => sn.to_owned(),
             Err(e) => {
                 return error_result(&req.address, req.port, &probed_at,
-                    format!("invalid server name: {e}"));
+                    format!("invalid SNI hostname: {e}"));
             }
         }
     };

@@ -175,6 +175,9 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
           followRedirects: true,
           timeoutSecs: 10,
           acceptInvalidCerts: true,
+          // Send the known hostname as the Host header so virtual-hosted servers
+          // respond for the correct vhost instead of returning 403/default page.
+          hostnameOverride: host.hostname ?? undefined,
         } satisfies HttpProbeRequest,
       });
       onUpdateHost?.(host.address, {
@@ -207,6 +210,9 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
           port: p.port,
           timeoutSecs: 10,
           acceptInvalidCerts: true,
+          // Use the known hostname as the TLS SNI so virtual-hosted servers
+          // present the correct certificate instead of dropping the handshake.
+          sniOverride: host.hostname ?? undefined,
         } satisfies TlsProbeRequest,
       });
       onUpdateHost?.(host.address, {

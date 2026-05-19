@@ -169,6 +169,11 @@ export interface HttpProbeRequest {
   followRedirects: boolean;
   timeoutSecs: number;
   acceptInvalidCerts: boolean;
+  /**
+   * Hostname to send in the HTTP Host header. Set this when probing an IP address
+   * on a virtual-hosted server so the correct vhost responds.
+   */
+  hostnameOverride?: string;
 }
 
 // ── Native TLS/certificate intelligence ──────────────────────────────────────
@@ -208,6 +213,11 @@ export interface TlsProbeRequest {
   port: number;
   timeoutSecs: number;
   acceptInvalidCerts: boolean;
+  /**
+   * Hostname to use as TLS SNI. Set this when probing an IP address so the
+   * server presents the certificate for the correct vhost.
+   */
+  sniOverride?: string;
 }
 
 export interface NmapStatus {

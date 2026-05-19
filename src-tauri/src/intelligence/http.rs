@@ -23,6 +23,12 @@ pub struct HttpProbeRequest {
     pub timeout_secs: u8,
     /// Accept self-signed / expired TLS certificates — on by default for pentest use.
     pub accept_invalid_certs: bool,
+    /// Optional hostname to send as the HTTP `Host` header.
+    /// When probing an IP address on a virtual-hosted server, set this to the
+    /// known hostname so the server responds for the correct vhost.
+    /// The TCP connection still goes to `address`; only the Host header changes.
+    #[serde(default)]
+    pub hostname_override: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,7 +99,16 @@ pub async fn probe(req: HttpProbeRequest) -> HttpProbeResult {
     };
 
     let start = Instant::now();
-    let response = match client.get(&url).send().await {
+
+    // Build the request, optionally overriding the Host header for virtual-hosted servers.
+    let mut request_builder = client.get(&url);
+    if let Some(ref hostname) = req.hostname_override {
+        // The TCP connection targets `address`; the Host header names the vhost.
+        // This mirrors: curl -H "Host: mysite.com" http://1.2.3.4/
+        request_builder = request_builder.header("Host", hostname.as_str());
+    }
+
+    let response = match request_builder.send().await {
         Ok(r) => r,
         Err(e) => return error_result(&url, &probed_at, e.to_string()),
     };
