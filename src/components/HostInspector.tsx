@@ -475,6 +475,11 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
                     <span style={{ fontSize: "9px", color: "var(--text-dim)", flexShrink: 0 }}>
                       {probe.responseTimeMs}ms
                     </span>
+                    <button
+                      onClick={() => onUpdateHost?.(host.address, { httpProbes: host.httpProbes!.filter((p) => p.url !== probe.url) })}
+                      title="Dismiss"
+                      style={{ flexShrink: 0, background: "transparent", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: "14px", lineHeight: 1, padding: "0 2px", opacity: 0.6 }}
+                    >×</button>
                   </div>
 
                   {/* Network error */}
@@ -596,6 +601,11 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
                     <span style={{ marginLeft: "auto", fontSize: "9px", color: "var(--text-dim)", flexShrink: 0 }}>
                       :{probe.port} · {probe.connectionTimeMs}ms
                     </span>
+                    <button
+                      onClick={() => onUpdateHost?.(host.address, { tlsProbes: host.tlsProbes!.filter((p) => p.port !== probe.port) })}
+                      title="Dismiss"
+                      style={{ flexShrink: 0, background: "transparent", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: "14px", lineHeight: 1, padding: "0 2px", opacity: 0.6 }}
+                    >×</button>
                   </div>
 
                   {/* Network error */}
