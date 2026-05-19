@@ -29,4 +29,14 @@ reqwest = { version = "0.12", features = ["rustls-tls"], default-features = fals
 chrono = { version = "0.4", features = ["serde"] }
 which = "6"
 roxmltree = "0"
+# TLS certificate intelligence — raw handshake without OpenSSL
+rustls = { version = "0.23", features = ["ring"] }
+tokio-rustls = "0.26"
+x509-parser = "0.16"
+# Async TCP stream + timeout for TLS probe (runtime provided by Tauri)
+tokio = { version = "1", features = ["net", "time"] }
+
+[dev-dependencies]
+# Test certificate generation (dev only — not included in release binary)
+rcgen = "0.13"
 

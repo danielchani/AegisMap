@@ -5,8 +5,9 @@ import { getVersionAdvisory } from "../data/knownVersions";
 import { formatScanAge, useNow } from "../hooks/useScanAge";
 import { hostRiskLevel, RISK_COLOR, RISK_LABEL } from "../lib/riskScore";
 import type {
-  HostResult, HttpProbeRequest, HttpProbeResult,
-  PortEntry, ScanProfile, SecurityHeaders, WorkflowStatus,
+  CertInfo, HostResult, HttpProbeRequest, HttpProbeResult,
+  PortEntry, ScanProfile, SecurityHeaders, TlsProbeRequest,
+  TlsProbeResult, WorkflowStatus,
 } from "../types";
 
 interface Props {
@@ -89,6 +90,53 @@ function Sparkline({ history }: { history: { ts: string; open: number }[] }) {
   );
 }
 
+function CertCard({ cert, isLeaf }: { cert: CertInfo; isLeaf: boolean }) {
+  const expColor = cert.isExpired ? "var(--danger)"
+    : (cert.daysUntilExpiry ?? 999) < 30 ? "var(--warning)"
+    : "var(--success)";
+  return (
+    <div style={{ marginTop: "5px", padding: "5px 8px", background: "rgba(0,0,0,0.18)", borderLeft: `2px solid ${isLeaf ? "var(--accent)" : "var(--border)"}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", marginBottom: "3px" }}>
+        <span style={{ fontSize: "8px", letterSpacing: "0.1em", color: isLeaf ? "var(--accent2)" : "var(--text-dim)" }}>
+          {isLeaf ? "LEAF" : "CA"}
+        </span>
+        {cert.isSelfSigned && (
+          <span style={{ fontSize: "7px", padding: "0 4px", color: "var(--warning)", border: "1px solid var(--warning)" }}>SELF-SIGNED</span>
+        )}
+        {cert.isExpired && (
+          <span style={{ fontSize: "7px", padding: "0 4px", color: "var(--danger)", border: "1px solid var(--danger)" }}>EXPIRED</span>
+        )}
+        {!cert.isExpired && cert.daysUntilExpiry !== undefined && cert.daysUntilExpiry < 30 && (
+          <span style={{ fontSize: "7px", padding: "0 4px", color: "var(--warning)", border: "1px solid var(--warning)" }}>
+            EXPIRES IN {cert.daysUntilExpiry}d
+          </span>
+        )}
+        {!cert.isExpired && cert.daysUntilExpiry !== undefined && cert.daysUntilExpiry >= 30 && (
+          <span style={{ fontSize: "7px", color: expColor }}>{cert.daysUntilExpiry}d left</span>
+        )}
+      </div>
+      {cert.subjectCn && (
+        <div style={{ fontFamily: "monospace", fontSize: "10px", color: "var(--text-hi)", marginBottom: "2px" }}>
+          CN={cert.subjectCn}
+        </div>
+      )}
+      {cert.subjectSan.length > 0 && (
+        <div style={{ fontSize: "9px", color: "var(--text-dim)", marginBottom: "2px", wordBreak: "break-all" }}>
+          SAN: {cert.subjectSan.join(", ")}
+        </div>
+      )}
+      {cert.issuer && (
+        <div style={{ fontSize: "8px", color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          Issuer: {cert.issuer}
+        </div>
+      )}
+      <div style={{ fontSize: "8px", color: "var(--text-dim)", marginTop: "2px" }}>
+        {cert.notBefore.slice(0, 10)} → <span style={{ color: expColor }}>{cert.notAfter.slice(0, 10)}</span>
+      </div>
+    </div>
+  );
+}
+
 export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
   const openPorts = host.ports.filter((p) => p.state === "open");
   const up        = host.status === "up";
@@ -100,8 +148,10 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
   const [tagInput,      setTagInput]     = useState("");
   const [expandedPort,  setExpandedPort] = useState<string | null>(null);
   const [portNoteVal,   setPortNoteVal]  = useState("");
-  const [probingPorts,  setProbingPorts] = useState<Set<number>>(new Set());
-  const [probeError,    setProbeError]   = useState<string | null>(null);
+  const [probingPorts,  setProbingPorts]    = useState<Set<number>>(new Set());
+  const [probeError,    setProbeError]      = useState<string | null>(null);
+  const [tlsProbingPorts, setTlsProbingPorts] = useState<Set<number>>(new Set());
+  const [tlsProbeError,   setTlsProbeError]   = useState<string | null>(null);
 
   const webPorts = openPorts.filter(
     (p) => WEB_PORTS.has(p.port) ||
@@ -134,6 +184,38 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
       setProbeError(typeof err === "string" ? err : JSON.stringify(err));
     } finally {
       setProbingPorts((prev) => { const n = new Set(prev); n.delete(p.port); return n; });
+    }
+  }
+
+  const TLS_PORTS = new Set([443, 8443, 4443, 636, 993, 995, 465, 5986, 8883]);
+  const tlsPorts = openPorts.filter(
+    (p) => TLS_PORTS.has(p.port) ||
+           p.service.toLowerCase().includes("https") ||
+           p.service.toLowerCase().includes("ssl") ||
+           p.service.toLowerCase().includes("imaps") ||
+           p.service.toLowerCase().includes("smtps") ||
+           p.service.toLowerCase().includes("pop3s"),
+  );
+
+  async function handleProbeTls(p: PortEntry) {
+    setTlsProbingPorts((prev) => new Set([...prev, p.port]));
+    setTlsProbeError(null);
+    try {
+      const result = await invoke<TlsProbeResult>("probe_tls", {
+        request: {
+          address: host.address,
+          port: p.port,
+          timeoutSecs: 10,
+          acceptInvalidCerts: true,
+        } satisfies TlsProbeRequest,
+      });
+      onUpdateHost?.(host.address, {
+        tlsProbes: [...(host.tlsProbes ?? []), result],
+      });
+    } catch (err) {
+      setTlsProbeError(typeof err === "string" ? err : JSON.stringify(err));
+    } finally {
+      setTlsProbingPorts((prev) => { const n = new Set(prev); n.delete(p.port); return n; });
     }
   }
 
@@ -433,6 +515,94 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
                       );
                     })}
                   </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* TLS CERT — probe buttons for TLS-capable ports */}
+      {tlsPorts.length > 0 && onUpdateHost && (
+        <div style={{ marginTop: "8px" }}>
+          <SLabel>TLS CERT <span style={{ fontSize: "8px", fontWeight: 400, opacity: 0.6 }}>(opt-in)</span></SLabel>
+          <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+            {tlsPorts.map((p) => {
+              const busy = tlsProbingPorts.has(p.port);
+              return (
+                <button
+                  key={p.port}
+                  onClick={() => handleProbeTls(p)}
+                  disabled={busy}
+                  style={{
+                    padding: "3px 8px", fontSize: "9px", letterSpacing: "0.08em",
+                    color: busy ? "var(--text-dim)" : "var(--accent)",
+                    border: `1px solid ${busy ? "var(--border)" : "var(--accent)"}`,
+                    background: busy ? "transparent" : "var(--accent-dim)",
+                    cursor: busy ? "default" : "pointer", transition: "all 0.12s",
+                  }}
+                >
+                  {busy ? "…" : "🔒"} :{p.port}/{p.protocol.toUpperCase()}
+                </button>
+              );
+            })}
+          </div>
+          {tlsProbeError && (
+            <div style={{ marginTop: "4px", fontSize: "9px", color: "var(--danger)" }}>
+              {tlsProbeError}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TLS CERTIFICATE — results from previous TLS probes, newest first */}
+      {(host.tlsProbes?.length ?? 0) > 0 && (
+        <div style={{ marginTop: "8px" }}>
+          <SLabel>TLS CERTIFICATES ({host.tlsProbes!.length})</SLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            {[...host.tlsProbes!].reverse().map((probe, i) => {
+              const leaf = probe.certificateChain[0];
+              const isError = !!probe.error;
+              const weakColor = "var(--warning)";
+              return (
+                <div
+                  key={i}
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderLeft: `2px solid ${isError ? "var(--danger)" : leaf?.isExpired ? "var(--danger)" : probe.cipherIsWeak ? weakColor : "var(--accent)"}`,
+                    padding: "7px 10px", fontSize: "10px",
+                    background: "rgba(0,0,0,0.15)",
+                  }}
+                >
+                  {/* Row 1: TLS version + cipher + timing */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", marginBottom: "4px" }}>
+                    {probe.tlsVersion && (
+                      <span style={{ fontFamily: "monospace", fontWeight: 700, color: "var(--accent)", fontSize: "11px" }}>
+                        {probe.tlsVersion}
+                      </span>
+                    )}
+                    {probe.cipherSuite && (
+                      <span style={{ fontSize: "8px", fontFamily: "monospace", color: probe.cipherIsWeak ? weakColor : "var(--text-dim)" }}>
+                        {probe.cipherSuite}
+                        {probe.cipherIsWeak && <span style={{ marginLeft: "4px", color: weakColor }}>⚠ WEAK</span>}
+                      </span>
+                    )}
+                    <span style={{ marginLeft: "auto", fontSize: "9px", color: "var(--text-dim)", flexShrink: 0 }}>
+                      :{probe.port} · {probe.connectionTimeMs}ms
+                    </span>
+                  </div>
+
+                  {/* Network error */}
+                  {probe.error && (
+                    <div style={{ color: "var(--danger)", fontSize: "9px", marginBottom: "4px" }}>
+                      ✗ {probe.error}
+                    </div>
+                  )}
+
+                  {/* Certificate chain */}
+                  {probe.certificateChain.map((cert, ci) => (
+                    <CertCard key={ci} cert={cert} isLeaf={ci === 0} />
+                  ))}
                 </div>
               );
             })}

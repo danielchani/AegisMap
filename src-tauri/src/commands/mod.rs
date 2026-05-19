@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::error::AppError;
 use crate::intelligence::http::{HttpProbeRequest, HttpProbeResult};
+use crate::intelligence::tls::{TlsProbeRequest, TlsProbeResult};
 use crate::models::ScanRequest;
 use crate::scanner::{
     executor::{self, ScanState},
@@ -58,6 +59,26 @@ pub async fn probe_http(request: HttpProbeRequest) -> Result<HttpProbeResult, Ap
         ));
     }
     Ok(crate::intelligence::http::probe(request).await)
+}
+
+/// Performs a raw TLS handshake to capture the certificate chain, negotiated
+/// TLS version, and cipher suite. Network/TLS errors are embedded in result.error.
+/// Only validation errors propagate as Err.
+#[tauri::command]
+pub async fn probe_tls(request: TlsProbeRequest) -> Result<TlsProbeResult, AppError> {
+    validation::validate_target(&request.address)?;
+    if request.address.contains('/') {
+        return Err(AppError::InvalidTarget(
+            "TLS probe requires a single host, not a CIDR range".into(),
+        ));
+    }
+    if request.port == 0 {
+        return Err(AppError::InvalidTarget("port must be 1–65535".into()));
+    }
+    if request.timeout_secs == 0 || request.timeout_secs > 30 {
+        return Err(AppError::InvalidTarget("timeout_secs must be 1–30".into()));
+    }
+    Ok(crate::intelligence::tls::probe(request).await)
 }
 
 // ── Session persistence commands ────────────────────────────────────────────────

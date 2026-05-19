@@ -22,6 +22,7 @@ pub fn run() {
             commands::list_sessions,
             commands::delete_session,
             commands::probe_http,
+            commands::probe_tls,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

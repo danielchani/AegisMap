@@ -78,6 +78,7 @@ export interface HostResult {
   portNotes?:      Record<string, string>;        // per-port notes keyed "port/protocol"
   portHistory?:    { ts: string; open: number }[]; // open-port count over time (last 10)
   httpProbes?:     HttpProbeResult[];             // opt-in HTTP surface probes (frontend-only)
+  tlsProbes?:      TlsProbeResult[];             // opt-in TLS certificate probes (frontend-only)
 }
 
 export interface ScanReport {
@@ -166,6 +167,45 @@ export interface HttpProbeRequest {
   port: number;
   useHttps: boolean;
   followRedirects: boolean;
+  timeoutSecs: number;
+  acceptInvalidCerts: boolean;
+}
+
+// ── Native TLS/certificate intelligence ──────────────────────────────────────
+
+export interface CertInfo {
+  subjectCn?: string;
+  /** DNS names and IP addresses from the Subject Alternative Name extension */
+  subjectSan: string[];
+  issuer?: string;
+  notBefore: string;  // ISO-8601
+  notAfter: string;   // ISO-8601
+  /** Days until expiry; negative means already expired */
+  daysUntilExpiry?: number;
+  isSelfSigned: boolean;
+  isExpired: boolean;
+  serial?: string;    // colon-separated hex bytes
+}
+
+export interface TlsProbeResult {
+  address: string;
+  port: number;
+  /** Negotiated TLS version, e.g. "TLS 1.3" */
+  tlsVersion?: string;
+  /** Negotiated cipher suite, e.g. "TLS13_AES_256_GCM_SHA384" */
+  cipherSuite?: string;
+  /** True for known-weak ciphers (RC4, DES, 3DES, EXPORT, NULL, ANON) */
+  cipherIsWeak: boolean;
+  /** Certificate chain — leaf first */
+  certificateChain: CertInfo[];
+  connectionTimeMs: number;
+  error?: string;
+  probedAt: string;  // ISO-8601
+}
+
+export interface TlsProbeRequest {
+  address: string;
+  port: number;
   timeoutSecs: number;
   acceptInvalidCerts: boolean;
 }
