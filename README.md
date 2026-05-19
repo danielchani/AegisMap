@@ -125,8 +125,8 @@ A desktop network reconnaissance tool built on Tauri 2 + React + Rust. AegisMap 
 - **Nmap** — [nmap.org/download](https://nmap.org/download.html)
   - Windows: default path `C:\Program Files (x86)\Nmap\` or add to `PATH`
   - Linux/macOS: `apt install nmap` / `brew install nmap`
-  - **OS Detect profile** requires administrator / root privileges
-  - **UDP Common profile** requires administrator / root privileges
+  - **OS Detect, UDP Common, Stealth SYN, ACK Probe, Evasion Scan** require root (Linux/macOS) or Npcap + Administrator (Windows)
+  - Windows raw-socket scan: install [Npcap](https://npcap.com) then run AegisMap as Administrator
 
 ---
 
@@ -171,28 +171,35 @@ npm run test:run     # single run (CI-friendly)
 | Quick | `-sT --top-ports 100 -T4` | 90s | Fast common-port sweep |
 | Standard TCP | `-sT -T4` | 600s | Full TCP scan |
 | Light Service Detection | `-sT -sV --version-light -T4` | 600s | Service names + versions |
-| OS Detect | `-sT -sV -O -T4` | 300s | OS fingerprinting — **requires root/admin** |
-| UDP Common | `-sU --top-ports 20 -T4` | 300s | Top 20 UDP ports — **requires root/admin** |
+| OS Detect | `-sT -sV -O -T4` | 300s | OS fingerprinting — **requires root/Npcap** |
+| UDP Common | `-sU --top-ports 20 -T4` | 300s | Top 20 UDP ports — **requires root/Npcap** |
+| Stealth SYN | `-sS --top-ports 1000 -T2` | 480s | Half-open scan, avoids app-layer logs — **requires root/Npcap** |
+| ACK Probe | `-sA --top-ports 1000 -T2` | 480s | Firewall ruleset mapping — **requires root/Npcap** |
+| Evasion Scan | `-sS -f --top-ports 1000 -T2 -D RND:5` | 600s | Fragmented packets + IP decoys — **requires root/Npcap** |
 
-All profiles include `-v --stats-every 1s -oX <tmpfile>` for streaming and XML output.
+All profiles append `-v --stats-every 1s -oX <tmpfile>` for streaming and XML output.
+
+Stealth/ACK/Evasion profiles use T2 (polite) timing by default to reduce network noise.
+All privileged profiles are pre-flight checked before nmap spawns — no silent failures.
 
 ---
 
 ## Security model
 
 - **No shell execution** — nmap is invoked via `std::process::Command::new()` with individual `.arg()` calls. No shell interpolation ever occurs.
-- **Content Security Policy** — restrictive CSP in Tauri config: `default-src 'self'`; scripts, styles, images, fonts, and connections locked to `'self'` and required protocols only.
-- **Tauri capability denials** — explicit `deny` entries for `fs:default` and `shell:default` in the capabilities config, preventing the webview from accessing filesystem or shell APIs.
-- **Input allowlist** — targets validated against a character allowlist (no `;`, `|`, `` ` ``, `$`, newlines, flag prefixes). Port ranges validated against digits/commas/hyphens only.
-- **Import sanitisation** — imported host data is sanitised on the frontend: HTML tags stripped, control characters removed, `javascript:` protocol blocked, event handler attributes rejected.
-- **Fixed profiles** — the frontend sends a profile name; backend constructs the argument list. Raw nmap flags are never sent from the UI.
-- **NSE allowlist** — 8 curated read-only scripts hardcoded in Rust; arbitrary script names from the frontend are rejected.
-- **Tamper-evident audit log** — HMAC integrity chain using djb2-extended hashing. Each log entry includes a hash of its content combined with the previous entry's hash. Chain verification detects any tampered or deleted entries.
-- **Path-traversal-safe persistence** — Rust session persistence sanitises IDs to alphanumeric, hyphens, and underscores only (max 128 chars), preventing directory traversal attacks.
-- **Import validation** — deep schema guard on every imported host entry; malformed entries rejected with a count.
-- **Static advisories** — CVE database and version hints are local static tables. AegisMap makes no outbound network requests of its own.
-- **44 backend unit tests** — covering validation (14), profiles (10), progress parsing (5), XML parsing (9+).
-- **48+ frontend tests** — covering risk scoring, scope validation, audit log integrity, CVE lookups, session diffing, and fingerprint confidence.
+- **Content Security Policy** — `script-src 'self'` (no `'unsafe-inline'`); style, image, font, and connection sources locked to `'self'` and required protocols. See `src-tauri/tauri.conf.json`.
+- **Tauri capability denials** — explicit `deny` entries for `fs:default` and `shell:default` in the capabilities config; the webview has no filesystem or shell access at all.
+- **CIDR scope limit** — IPv4 CIDRs broader than `/20` (>4 096 hosts) and IPv6 CIDRs broader than `/48` are rejected before nmap is invoked. Enforced in `scanner/validation.rs`.
+- **Pre-scan privilege check** — profiles requiring raw sockets (Stealth SYN, ACK Probe, Evasion, OS Detect, UDP Common) are checked against the OS-level privilege state before nmap spawns. Insufficiently privileged requests return an actionable error immediately (`scanner/preflight.rs`).
+- **Input allowlist** — targets validated against a character allowlist (no `;`, `|`, `` ` ``, `$`, newlines, flag prefixes). Port ranges: digits/commas/hyphens only. Decoys: IPv4/IPv6/ME/RND only. Timing: 0–4 only. NSE scripts: exact allowlist match.
+- **Fixed profiles** — the frontend sends a profile enum variant; backend constructs the argument list. Raw nmap flags are never accepted from the UI.
+- **NSE allowlist** — 14 curated read-only scripts hardcoded in Rust; arbitrary script names are rejected.
+- **Tamper-evident audit log** — HMAC integrity chain using djb2-extended hashing; chain verification detects any tampered or deleted entries.
+- **Path-traversal-safe persistence** — session IDs sanitised to alphanumeric, hyphens, and underscores only (max 128 chars); sessions always written inside the platform app-data directory.
+- **Import sanitisation** — deep schema guard on imported host data; HTML tags, control characters, `javascript:` protocol, and event-handler attributes all stripped.
+- **Static advisories** — CVE database and version hints are local static tables. AegisMap makes zero outbound network requests.
+- **73 backend unit tests** — validation (29), profiles (20), preflight (3), progress parsing (5), XML parsing (10+), nmap (3).
+- **58 frontend tests** — risk scoring, scope validation, audit log integrity, CVE lookups, session diffing, and fingerprint confidence.
 
 ---
 
@@ -248,7 +255,8 @@ AegisMap/
 │
 └── src-tauri/src/
     ├── scanner/
-    │   ├── validation.rs            Target + port-range + NSE script input validation
+    │   ├── validation.rs            Target / port-range / CIDR scope / NSE / decoy / timing validation
+    │   ├── preflight.rs             Pre-scan privilege check (EUID / Npcap) per profile
     │   ├── profiles.rs              Profile → safe nmap argument lists + per-profile timeouts
     │   ├── executor.rs              Process spawn, watchdog timeout, channel streaming, cancellation
     │   ├── xml_parser.rs            Authoritative XML result parser (handles nmap DOCTYPE)
