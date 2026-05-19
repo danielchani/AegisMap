@@ -77,6 +77,7 @@ export interface HostResult {
   tags?:           string[];                      // custom analyst tags
   portNotes?:      Record<string, string>;        // per-port notes keyed "port/protocol"
   portHistory?:    { ts: string; open: number }[]; // open-port count over time (last 10)
+  httpProbes?:     HttpProbeResult[];             // opt-in HTTP surface probes (frontend-only)
 }
 
 export interface ScanReport {
@@ -125,6 +126,49 @@ export type ScanStreamEvent =
 
 export type ScanStatus =
   | "idle" | "starting" | "running" | "cancelling" | "completed" | "failed";
+
+// ── Native HTTP/HTTPS surface intelligence ────────────────────────────────────
+
+export interface SecurityHeaders {
+  hsts?: string;
+  contentSecurityPolicy?: string;
+  xFrameOptions?: string;
+  xContentTypeOptions?: string;
+  xXssProtection?: string;
+  referrerPolicy?: string;
+  permissionsPolicy?: string;
+  crossOriginOpenerPolicy?: string;
+  crossOriginResourcePolicy?: string;
+  crossOriginEmbedderPolicy?: string;
+}
+
+export interface HttpProbeResult {
+  url: string;
+  finalUrl: string;
+  statusCode?: number;
+  statusText?: string;
+  title?: string;
+  server?: string;
+  xPoweredBy?: string;
+  contentType?: string;
+  responseTimeMs: number;
+  responseSizeBytes?: number;
+  securityHeaders: SecurityHeaders;
+  /** Human-readable tech fingerprint strings, e.g. "Server: nginx/1.24" */
+  technologyHints: string[];
+  /** Network / TLS error — populated when the probe ran but failed at the transport level */
+  error?: string;
+  probedAt: string; // ISO-8601
+}
+
+export interface HttpProbeRequest {
+  address: string;
+  port: number;
+  useHttps: boolean;
+  followRedirects: boolean;
+  timeoutSecs: number;
+  acceptInvalidCerts: boolean;
+}
 
 export interface NmapStatus {
   installed: boolean;

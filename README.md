@@ -29,6 +29,15 @@ A desktop network reconnaissance tool built on Tauri 2 + React + Rust. AegisMap 
 | **Host identity extraction** | Passive identity enrichment from SSL certs (CN, SANs, org), banners, HTTP titles, and server headers — builds probable hostnames and tech stack |
 | **Session diffing** | Compare two scan snapshots to detect added/removed/changed hosts and port-level changes (new ports, removed ports, version changes) |
 
+### Native Intelligence (no external tools)
+| Feature | Details |
+|---|---|
+| **Native HTTP/HTTPS surface probe** | Per-host opt-in GET probe — status code, page title, redirect chain, response time, server header, content type. No `httpx`, no `curl`, no shell. Driven by `reqwest` + `rustls` in Rust. |
+| **Security header scorecard** | 10 headers checked per probe: HSTS, CSP, X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy, COOP, CORP, COEP. Each shown as ✓/✗ in the probe result card. |
+| **Technology fingerprinting** | Server, X-Powered-By, X-Generator, X-AspNet-Version headers + cookie-name heuristics (PHPSESSID → PHP, JSESSIONID → Java/Tomcat, etc.) all surfaced as tagged hints. |
+| **Accept invalid TLS certs** | Enabled by default for pentest use — self-signed and expired certificates do not block probes. |
+| **Probe result persistence** | HTTP probe results are stored on the HostResult and persist in the localStorage session alongside port data. |
+
 ### Session Management
 | Feature | Details |
 |---|---|
@@ -198,7 +207,7 @@ All privileged profiles are pre-flight checked before nmap spawns — no silent 
 - **Path-traversal-safe persistence** — session IDs sanitised to alphanumeric, hyphens, and underscores only (max 128 chars); sessions always written inside the platform app-data directory.
 - **Import sanitisation** — deep schema guard on imported host data; HTML tags, control characters, `javascript:` protocol, and event-handler attributes all stripped.
 - **Static advisories** — CVE database and version hints are local static tables. AegisMap makes zero outbound network requests.
-- **73 backend unit tests** — validation (29), profiles (20), preflight (3), progress parsing (5), XML parsing (10+), nmap (3).
+- **91 backend unit tests** — validation (29), profiles (20), preflight (3), intelligence/http (18), progress parsing (5), XML parsing (10+), nmap (3).
 - **58 frontend tests** — risk scoring, scope validation, audit log integrity, CVE lookups, session diffing, and fingerprint confidence.
 
 ---
