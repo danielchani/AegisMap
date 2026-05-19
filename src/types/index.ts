@@ -128,6 +128,65 @@ export type ScanStreamEvent =
 export type ScanStatus =
   | "idle" | "starting" | "running" | "cancelling" | "completed" | "failed";
 
+// ── Findings & Evidence ───────────────────────────────────────────────────────
+
+export type FindingSeverity   = "info" | "low" | "medium" | "high" | "critical";
+export type FindingStatus     = "draft" | "needs_review" | "confirmed" | "false_positive" | "accepted_risk" | "remediated";
+export type FindingConfidence = "observed" | "heuristic" | "candidate" | "confirmed";
+export type FindingSource     = "analyst" | "cve_candidate" | "version_advisory" | "service_advisory" | "script_result";
+export type EvidenceType      = "scan_snapshot" | "script_output" | "probe_result" | "advisory_match" | "manual_note";
+
+export interface PentestFinding {
+  id: string;
+  sessionId: string;
+  title: string;
+  severity: FindingSeverity;
+  /** Accuracy tier — enforced in Rust. CVE candidates are always "candidate"; never auto-confirmed. */
+  confidence: FindingConfidence;
+  status: FindingStatus;
+  affectedHosts: string[];
+  affectedPorts?: string[];
+  summary: string;
+  technicalDetails?: string;
+  remediation?: string;
+  references?: string[];
+  source: FindingSource;
+  sourceRef?: string;
+  evidenceIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EvidenceItem {
+  id: string;
+  findingId: string;
+  sessionId: string;
+  type: EvidenceType;
+  hostAddress?: string;
+  portRef?: string;
+  excerpt: string;
+  rawData?: string;
+  hash?: string;
+  createdAt: string;
+}
+
+/** Human-readable label for each confidence level — enforces accuracy language. */
+export const CONFIDENCE_LABEL: Record<FindingConfidence, string> = {
+  observed:  "OBSERVED",
+  heuristic: "ADVISORY",
+  candidate: "CVE CANDIDATE",
+  confirmed: "CONFIRMED",
+};
+
+export const FINDING_STATUS_LABEL: Record<FindingStatus, string> = {
+  draft:          "Draft",
+  needs_review:   "Needs Review",
+  confirmed:      "Confirmed",
+  false_positive: "False Positive",
+  accepted_risk:  "Accepted Risk",
+  remediated:     "Remediated",
+};
+
 // ── Native HTTP/HTTPS surface intelligence ────────────────────────────────────
 
 export interface SecurityHeaders {

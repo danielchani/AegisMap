@@ -2,6 +2,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getAdvisory, SEVERITY_COLOR } from "../data/cveHints";
 import { getVersionAdvisory } from "../data/knownVersions";
+import { createFindingFromAdvisory, createFindingFromScript } from "../lib/findings";
 import { formatScanAge, useNow } from "../hooks/useScanAge";
 import { hostRiskLevel, RISK_COLOR, RISK_LABEL } from "../lib/riskScore";
 import type {
@@ -9,6 +10,9 @@ import type {
   PortEntry, ScanProfile, SecurityHeaders, TlsProbeRequest,
   TlsProbeResult, WorkflowStatus,
 } from "../types";
+
+// Session ID injected when findings integration is active
+const ACTIVE_SESSION_ID = "active";
 
 interface Props {
   host: HostResult;
@@ -363,11 +367,23 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
                     <span style={{ color: "var(--text-dim)", fontSize: "10px" }}>{p.version ?? "—"}</span>
                     <span style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
                       {adv && (
-                        <span title={adv.detail} style={{ display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "8px", padding: "1px 5px", border: `1px solid ${SEVERITY_COLOR[adv.severity]}`, color: SEVERITY_COLOR[adv.severity], letterSpacing: "0.06em", cursor: "default" }}>⚠ {adv.label}</span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "3px" }}>
+                          <span title={adv.detail} style={{ display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "8px", padding: "1px 5px", border: `1px solid ${SEVERITY_COLOR[adv.severity]}`, color: SEVERITY_COLOR[adv.severity], letterSpacing: "0.06em", cursor: "default" }}>⚠ {adv.label}</span>
+                        </span>
                       )}
                       {verAdv && (
-                        <span title={verAdv.message} style={{ display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "8px", padding: "1px 5px", border: `1px solid ${verAdv.type === "eol" ? "var(--danger)" : "var(--warning)"}`, color: verAdv.type === "eol" ? "var(--danger)" : "var(--warning)", letterSpacing: "0.06em", cursor: "default" }}>
-                          {verAdv.type === "eol" ? "⚠ EOL" : "⬆ UPDATE"}
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "3px" }}>
+                          <span title={verAdv.message} style={{ display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "8px", padding: "1px 5px", border: `1px solid ${verAdv.type === "eol" ? "var(--danger)" : "var(--warning)"}`, color: verAdv.type === "eol" ? "var(--danger)" : "var(--warning)", letterSpacing: "0.06em", cursor: "default" }}>
+                            {verAdv.type === "eol" ? "⚠ EOL" : "⬆ UPDATE"}
+                          </span>
+                          {/* → FINDING: version/EOL advisory */}
+                          {onUpdateHost && p.product && (
+                            <button
+                              title={`Create finding from ${verAdv.type === "eol" ? "EOL" : "version"} advisory`}
+                              onClick={() => void createFindingFromAdvisory({ sessionId: ACTIVE_SESSION_ID, hostAddress: host.address, portRef: portKey, product: p.product!, version: p.version ?? "", advisoryType: verAdv.type as "update" | "eol", message: verAdv.message })}
+                              style={{ fontSize: "7px", padding: "0 4px", color: "var(--accent2)", border: "1px solid var(--accent2)", background: "transparent", cursor: "pointer", letterSpacing: "0.06em" }}
+                            >+F</button>
+                          )}
                         </span>
                       )}
                     </span>
@@ -633,7 +649,16 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
           <div style={{ border: "1px solid var(--border)" }}>
             {host.script_results!.map((s, i) => (
               <div key={i} style={{ padding: "5px 8px", borderBottom: i < host.script_results!.length - 1 ? "1px solid var(--border)" : "none", fontSize: "10px" }}>
-                <span style={{ color: "var(--accent2)", fontFamily: "monospace", fontSize: "9px", letterSpacing: "0.06em" }}>{s.id}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <span style={{ color: "var(--accent2)", fontFamily: "monospace", fontSize: "9px", letterSpacing: "0.06em", flex: 1 }}>{s.id}</span>
+                  {onUpdateHost && (
+                    <button
+                      title="Create finding from script output"
+                      onClick={() => void createFindingFromScript({ sessionId: ACTIVE_SESSION_ID, hostAddress: host.address, scriptId: s.id, scriptOutput: s.output })}
+                      style={{ fontSize: "7px", padding: "0 4px", color: "var(--accent2)", border: "1px solid var(--accent2)", background: "transparent", cursor: "pointer", letterSpacing: "0.06em", flexShrink: 0 }}
+                    >+F</button>
+                  )}
+                </div>
                 <div style={{ color: "var(--text)", marginTop: "2px", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{s.output}</div>
               </div>
             ))}

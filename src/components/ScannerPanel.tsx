@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { AttackSurface } from "./AttackSurface";
 import { AuditLog } from "./AuditLog";
+import { FindingsPanel } from "./FindingsPanel";
 import { HostInspector } from "./HostInspector";
 import { ResultsTable } from "./ResultsTable";
 import { ScopeManager } from "./ScopeManager";
 import { isInScope } from "../lib/scopeUtils";
 import type {
-  HostResult, PortFamily, ScanProfile, ScanReport,
+  HostResult, PortFamily, PentestFinding, ScanProfile, ScanReport,
   ScanRequest, ScanStatus, ScanStreamEvent,
 } from "../types";
 
@@ -30,7 +31,10 @@ interface ScannerPanelProps {
   selectedHost: HostResult | null;
   portFilter: PortFamily;
   authorizedRanges: string[];
-  activeTab?: "scan" | "results" | "inspect" | "audit";
+  activeTab?: "scan" | "results" | "inspect" | "audit" | "findings";
+  findings?: PentestFinding[];
+  sessionId?: string;
+  onFindingsChange?: (findings: PentestFinding[]) => void;
   onStatusChange:       (s: ScanStatus) => void;
   onReportChange:       (r: ScanReport | null) => void;
   onSelectHost:         (h: HostResult | null) => void;
@@ -91,6 +95,7 @@ function StatusDot({ status }: { status: ScanStatus }) {
 export function ScannerPanel({
   status, report, sessionHostCount, selectedHost, portFilter, authorizedRanges,
   activeTab = "scan",
+  findings, sessionId, onFindingsChange,
   onStatusChange, onReportChange, onSelectHost, onRemoveHost, onUpdateHost,
   onSetPortFilter, onSetAuthorizedRanges, onStdoutLine, onScanStart, onClearSession,
   onPrint, onScanStarted, onScanComplete,
@@ -324,10 +329,11 @@ export function ScannerPanel({
   const canScan = !busy && target.trim().length > 0;
   const has     = sessionHostCount > 0;
 
-  const showScan    = activeTab === "scan";
-  const showResults = activeTab === "results";
-  const showInspect = activeTab === "inspect";
-  const showAudit   = activeTab === "audit";
+  const showScan     = activeTab === "scan";
+  const showResults  = activeTab === "results";
+  const showInspect  = activeTab === "inspect";
+  const showAudit    = activeTab === "audit";
+  const showFindings = activeTab === "findings";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1rem", padding: "0 0 1.5rem" }}>
@@ -640,6 +646,16 @@ export function ScannerPanel({
         </div>
       )}
       {/* ═══════════ END AUDIT TAB ═══════════ */}
+
+      {/* ═══════════ FINDINGS TAB ═══════════ */}
+      {showFindings && sessionId && (
+        <FindingsPanel
+          sessionId={sessionId}
+          findings={findings ?? []}
+          onFindingsChange={onFindingsChange ?? (() => {})}
+        />
+      )}
+      {/* ═══════════ END FINDINGS TAB ═══════════ */}
 
       </div>
     </div>

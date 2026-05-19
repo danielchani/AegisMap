@@ -11,7 +11,8 @@ import { PrintReport } from "./components/PrintReport";
 import { ScanScene } from "./components/visualization/ScanScene";
 import { useProvisionalHosts } from "./hooks/useProvisionalHosts";
 import { appendAudit } from "./lib/auditLog";
-import type { HostResult, PortEntry, PortFamily, ScanReport, ScanStatus } from "./types";
+import { listFindings } from "./lib/findings";
+import type { HostResult, PentestFinding, PortEntry, PortFamily, ScanReport, ScanStatus } from "./types";
 import type { PanelTab } from "./stores/uiStore";
 import "./App.css";
 
@@ -67,6 +68,7 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem(SCOPE_KEY) ?? "[]"); } catch { return []; }
   });
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [findings,     setFindings]     = useState<PentestFinding[]>([]);
 
   // ── New UI state ─────────────────────────────────────────────────────────────
   const [activeTab,        setActiveTab]        = useState<PanelTab>("scan");
@@ -119,6 +121,10 @@ export default function App() {
       // Load active session from SQLite into local state
       const hosts = await invoke<HostResult[]>("get_active_session").catch(() => []);
       if (Array.isArray(hosts) && hosts.length > 0) setSessionHosts(hosts);
+
+      // Load findings for the active session
+      const loadedFindings = await listFindings("active").catch(() => []);
+      if (loadedFindings.length > 0) setFindings(loadedFindings);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -360,6 +366,7 @@ export default function App() {
             onTabChange={setActiveTab}
             hostCount={sessionHosts.length}
             hasSelection={!!selectedHost}
+            findingCount={findings.length}
           />
 
           {/* Tab content */}
@@ -385,6 +392,9 @@ export default function App() {
               onPrint={handlePrint}
               onScanStarted={handleScanStarted}
               onScanComplete={handleScanComplete}
+              findings={findings}
+              sessionId="active"
+              onFindingsChange={setFindings}
             />
           </div>
 
@@ -448,7 +458,7 @@ export default function App() {
 
       {/* Hidden print report — activated by window.print() */}
       {displayReport && (
-        <PrintReport report={displayReport} sessionHosts={sessionHosts} />
+        <PrintReport report={displayReport} sessionHosts={sessionHosts} findings={findings} />
       )}
     </div>
   );

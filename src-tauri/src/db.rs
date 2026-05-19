@@ -68,10 +68,46 @@ CREATE TABLE IF NOT EXISTS audit_log (
     hash      TEXT    NOT NULL   -- 64-char SHA-256 hex
 );
 
-CREATE INDEX IF NOT EXISTS idx_hosts_session ON hosts(session_id);
-CREATE INDEX IF NOT EXISTS idx_ports_host    ON ports(host_id);
-CREATE INDEX IF NOT EXISTS idx_tags_host     ON host_tags(host_id);
-CREATE INDEX IF NOT EXISTS idx_audit_ts      ON audit_log(timestamp);
+-- Analyst findings (linked to a session; never auto-confirmed)
+CREATE TABLE IF NOT EXISTS findings (
+    id                TEXT PRIMARY KEY,
+    session_id        TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    title             TEXT NOT NULL,
+    severity          TEXT NOT NULL,       -- info/low/medium/high/critical
+    confidence        TEXT NOT NULL,       -- observed/heuristic/candidate/confirmed
+    status            TEXT NOT NULL DEFAULT 'draft',
+    affected_hosts    TEXT NOT NULL,       -- JSON string[]
+    affected_ports    TEXT,               -- JSON string[]
+    summary           TEXT NOT NULL,
+    technical_details TEXT,
+    remediation       TEXT,
+    ext_refs          TEXT,               -- JSON string[] (CVE IDs, URLs)
+    source            TEXT NOT NULL,       -- analyst/cve_candidate/version_advisory/service_advisory/script_result
+    source_ref        TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+
+-- Evidence items linked to findings
+CREATE TABLE IF NOT EXISTS evidence (
+    id           TEXT PRIMARY KEY,
+    finding_id   TEXT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    session_id   TEXT NOT NULL,
+    type         TEXT NOT NULL,            -- scan_snapshot/script_output/probe_result/advisory_match/manual_note
+    host_address TEXT,
+    port_ref     TEXT,
+    excerpt      TEXT NOT NULL,
+    raw_data     TEXT,                     -- JSON snapshot
+    hash         TEXT,                     -- SHA-256 of raw_data
+    created_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hosts_session    ON hosts(session_id);
+CREATE INDEX IF NOT EXISTS idx_ports_host       ON ports(host_id);
+CREATE INDEX IF NOT EXISTS idx_tags_host        ON host_tags(host_id);
+CREATE INDEX IF NOT EXISTS idx_audit_ts         ON audit_log(timestamp);
+CREATE INDEX IF NOT EXISTS idx_findings_session ON findings(session_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_finding ON evidence(finding_id);
 "#;
 
 // ── Connection factory ────────────────────────────────────────────────────────

@@ -29,6 +29,21 @@ A desktop network reconnaissance tool built on Tauri 2 + React + Rust. AegisMap 
 | **Host identity extraction** | Passive identity enrichment from SSL certs (CN, SANs, org), banners, HTTP titles, and server headers — builds probable hostnames and tech stack |
 | **Session diffing** | Compare two scan snapshots to detect added/removed/changed hosts and port-level changes (new ports, removed ports, version changes) |
 
+### Findings & Evidence
+| Feature | Details |
+|---|---|
+| **Findings workspace** | Fifth panel tab (FINDINGS) shows all analyst findings for the active session with severity/status filters and inline detail view |
+| **Finding model** | Each finding has: title, severity (info→critical), confidence tier (observed/heuristic/candidate/confirmed), status (draft→remediated), affected host/port, summary, technical details, remediation, references |
+| **Accuracy enforcement** | CVE candidates always start as `candidate` confidence — enforced in Rust backend, not just UI. Auto-generated findings are never auto-confirmed. UI displays distinct labels: OBSERVED, ADVISORY, CVE CANDIDATE, CONFIRMED |
+| **Create from CVE** | ⚠ badge on port rows gains a +F button — creates a `candidate` finding from CVE match with evidence auto-attached |
+| **Create from advisory** | UPDATE/EOL badge gains a +F button — creates a `heuristic` finding from version advisory |
+| **Create from script** | Each NSE script output gains a +F button — creates an `observed` finding with script output as evidence |
+| **Manual findings** | + NEW FINDING button in the FINDINGS tab creates blank analyst-authored findings |
+| **Evidence model** | Each finding can have evidence items: advisory_match, script_output, probe_result, manual_note — with SHA-256 hash of raw data |
+| **Findings in PDF** | PDF report includes a Findings section (confirmed + needs_review only; draft excluded). Executive summary includes confirmed finding count |
+| **Findings in SQLite** | Findings and evidence persisted in SQLite via `findings` and `evidence` tables with session cascade delete |
+| **Audit trail** | FINDING_CREATE, FINDING_STATUS, FINDING_DELETE, EVIDENCE_ATTACH events written to audit log |
+
 ### Native Intelligence (no external tools)
 | Feature | Details |
 |---|---|
@@ -210,7 +225,7 @@ All privileged profiles are pre-flight checked before nmap spawns — no silent 
 - **Path-traversal-safe persistence** — session IDs sanitised to alphanumeric, hyphens, and underscores only (max 128 chars); sessions always written inside the platform app-data directory.
 - **Import sanitisation** — deep schema guard on imported host data; HTML tags, control characters, `javascript:` protocol, and event-handler attributes all stripped.
 - **Static advisories** — CVE database and version hints are local static tables. AegisMap makes zero outbound network requests.
-- **122 backend unit tests** — db_audit (9), db_session (8), validation (29), profiles (20), preflight (3), intelligence/http (18), intelligence/tls (14), progress parsing (5), XML parsing (10+), nmap (3).
+- **129 backend unit tests** — db_findings (6), db_audit (9), db_session (8), validation (29), profiles (20), preflight (3), intelligence/http (18), intelligence/tls (14), progress parsing (5), XML parsing (10+), nmap (3).
 - **58 frontend tests** — risk scoring, scope validation, audit log integrity, CVE lookups, session diffing, and fingerprint confidence.
 
 ---

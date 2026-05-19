@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod db;
 pub mod db_audit;
+pub mod db_findings;
 pub mod db_migrate;
 pub mod db_session;
 pub mod error;
@@ -62,6 +63,14 @@ pub fn run() {
             commands::load_audit_entries,
             commands::verify_audit_chain,
             commands::clear_audit_log,
+            // Findings & Evidence
+            commands::create_finding,
+            commands::update_finding,
+            commands::delete_finding,
+            commands::list_findings,
+            commands::attach_evidence,
+            commands::delete_evidence,
+            commands::list_evidence_for_finding,
             // Legacy JSON-file session commands (kept during transition)
             commands::save_session,
             commands::load_session,

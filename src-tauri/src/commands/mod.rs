@@ -230,3 +230,91 @@ pub fn clear_audit_log(db: tauri::State<'_, DbConn>) -> Result<(), AppError> {
     let conn = db.lock().unwrap();
     crate::db_audit::clear(&conn)
 }
+
+// ── Findings & Evidence commands ───────────────────────────────────────────────
+
+#[tauri::command]
+pub fn create_finding(
+    db: tauri::State<'_, DbConn>,
+    finding: crate::db_findings::FindingInput,
+) -> Result<String, AppError> {
+    let conn = db.lock().unwrap();
+    let id = crate::db_findings::create_finding(&conn, finding)?;
+    // Audit
+    crate::db_audit::append_entry(&conn, "FINDING_CREATE", &id).ok();
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn update_finding(
+    db: tauri::State<'_, DbConn>,
+    id: String,
+    patch: crate::db_findings::FindingPatch,
+) -> Result<(), AppError> {
+    let conn = db.lock().unwrap();
+    // Capture old status for audit
+    let old_status = crate::db_findings::get_finding(&conn, &id)
+        .ok().and_then(|f| f["status"].as_str().map(String::from))
+        .unwrap_or_default();
+    crate::db_findings::update_finding(&conn, &id, patch)?;
+    let new_status = crate::db_findings::get_finding(&conn, &id)
+        .ok().and_then(|f| f["status"].as_str().map(String::from))
+        .unwrap_or_default();
+    if old_status != new_status {
+        crate::db_audit::append_entry(&conn, "FINDING_STATUS", &format!("{id} · {old_status} → {new_status}")).ok();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_finding(
+    db: tauri::State<'_, DbConn>,
+    id: String,
+) -> Result<(), AppError> {
+    let conn = db.lock().unwrap();
+    let title = crate::db_findings::get_finding(&conn, &id)
+        .ok().and_then(|f| f["title"].as_str().map(String::from))
+        .unwrap_or_default();
+    crate::db_findings::delete_finding(&conn, &id)?;
+    crate::db_audit::append_entry(&conn, "FINDING_DELETE", &format!("{id} · {title}")).ok();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_findings(
+    db: tauri::State<'_, DbConn>,
+    session_id: String,
+) -> Result<Vec<serde_json::Value>, AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_findings::list_findings(&conn, &session_id)
+}
+
+#[tauri::command]
+pub fn attach_evidence(
+    db: tauri::State<'_, DbConn>,
+    evidence: crate::db_findings::EvidenceInput,
+) -> Result<String, AppError> {
+    let conn = db.lock().unwrap();
+    let finding_id = evidence.finding_id.clone();
+    let ev_id = crate::db_findings::attach_evidence(&conn, evidence)?;
+    crate::db_audit::append_entry(&conn, "EVIDENCE_ATTACH", &format!("{ev_id} → finding {finding_id}")).ok();
+    Ok(ev_id)
+}
+
+#[tauri::command]
+pub fn delete_evidence(
+    db: tauri::State<'_, DbConn>,
+    id: String,
+) -> Result<(), AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_findings::delete_evidence(&conn, &id)
+}
+
+#[tauri::command]
+pub fn list_evidence_for_finding(
+    db: tauri::State<'_, DbConn>,
+    finding_id: String,
+) -> Result<Vec<serde_json::Value>, AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_findings::list_evidence_for_finding(&conn, &finding_id)
+}
