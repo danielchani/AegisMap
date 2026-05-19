@@ -14,6 +14,18 @@ pub enum AppError {
 
     #[error("IO error: {0}")]
     Io(String),
+
+    #[error("Persistence error: {0}")]
+    PersistenceError(String),
+
+    #[error("Database error: {0}")]
+    DatabaseError(String),
+}
+
+impl From<rusqlite::Error> for AppError {
+    fn from(e: rusqlite::Error) -> Self {
+        AppError::DatabaseError(e.to_string())
+    }
 }
 
 impl From<std::io::Error> for AppError {

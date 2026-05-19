@@ -1,13 +1,20 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { clearAudit, loadAudit, verifyAuditChain } from "../lib/auditLog";
 import type { AuditEntry } from "../lib/auditLog";
 
 export function AuditLog() {
   const [open,      setOpen]      = useState(false);
-  const [entries,   setEntries]   = useState<AuditEntry[]>(() => loadAudit().slice(-50).reverse());
+  const [entries,   setEntries]   = useState<AuditEntry[]>([]);
   const [integrity, setIntegrity] = useState<{ valid: boolean; brokenAt?: number } | null>(null);
   const [migrated,  setMigrated]  = useState(false);
   const [verifying, setVerifying] = useState(false);
+
+  // Load entries when panel first opens
+  useEffect(() => {
+    if (open && entries.length === 0) {
+      loadAudit(50).then((e) => setEntries([...e].reverse())).catch(() => {});
+    }
+  }, [open]);
 
   async function runVerify() {
     setVerifying(true);
@@ -20,35 +27,38 @@ export function AuditLog() {
     }
   }
 
-  function handleRefresh() {
-    setEntries(loadAudit().slice(-50).reverse());
+  async function handleRefresh() {
+    const entries = await loadAudit(50);
+    setEntries([...entries].reverse());
     void runVerify();
   }
 
-  function handleClear() {
+  async function handleClear() {
     if (!window.confirm("Clear the entire audit log?")) return;
-    clearAudit();
+    await clearAudit();
     setEntries([]);
     setIntegrity(null);
     setMigrated(false);
   }
 
   function handleExport() {
-    const text = loadAudit()
-      .map((e) => `[${e.timestamp}] ${e.action}: ${e.details} [sha256:${e.hash}]`)
-      .join("\n");
-    const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
-    Object.assign(document.createElement("a"), {
-      href: url, download: `aegismap-audit-${Date.now()}.txt`,
-    }).click();
-    URL.revokeObjectURL(url);
+    loadAudit().then((allEntries) => {
+      const text = allEntries
+        .map((e) => `[${e.timestamp}] ${e.action}: ${e.details} [sha256:${e.hash}]`)
+        .join("\n");
+      const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+      Object.assign(document.createElement("a"), {
+        href: url, download: `aegismap-audit-${Date.now()}.txt`,
+      }).click();
+      URL.revokeObjectURL(url);
+    }).catch(() => {});
   }
 
   return (
     <div style={{ padding: "0 1rem" }}>
       {/* Toggle */}
       <div
-        onClick={() => { setOpen((o) => !o); if (!open) handleRefresh(); }}
+        onClick={() => { setOpen((o) => !o); if (!open) void handleRefresh(); }}
         style={{
           display: "flex", alignItems: "center", gap: "8px", cursor: "pointer",
           fontSize: "9px", letterSpacing: "0.18em", color: "var(--text-dim)",
@@ -72,14 +82,14 @@ export function AuditLog() {
 
       {open && (
         <div style={{ marginTop: "7px" }}>
-          {/* Migration notice — shown once when v1→v2 upgrade occurred */}
+          {/* Migration notice */}
           {migrated && (
             <div style={{
               padding: "5px 8px", marginBottom: "6px",
               background: "rgba(56,189,248,0.07)", border: "1px solid rgba(56,189,248,0.35)",
               fontSize: "9px", color: "var(--accent)", letterSpacing: "0.06em",
             }}>
-              ℹ Audit log upgraded to SHA-256 chain integrity. Previous signatures reset — all entries preserved.
+              ℹ Audit log upgraded to SHA-256 chain. Previous signatures reset — all entries preserved.
             </div>
           )}
 
@@ -96,7 +106,7 @@ export function AuditLog() {
 
           {/* Controls */}
           <div style={{ display: "flex", gap: "4px", marginBottom: "4px" }}>
-            <button onClick={handleRefresh} style={{ fontSize: "8px", padding: "2px 6px", color: "var(--text-dim)", border: "1px solid var(--border)", background: "transparent", letterSpacing: "0.1em" }}>
+            <button onClick={() => void handleRefresh()} style={{ fontSize: "8px", padding: "2px 6px", color: "var(--text-dim)", border: "1px solid var(--border)", background: "transparent", letterSpacing: "0.1em" }}>
               REFRESH
             </button>
             <button
@@ -110,12 +120,12 @@ export function AuditLog() {
             <button onClick={handleExport} style={{ fontSize: "8px", padding: "2px 6px", color: "var(--accent2)", border: "1px solid var(--accent2)", background: "transparent", letterSpacing: "0.1em" }}>
               ↓ EXPORT TXT
             </button>
-            <button onClick={handleClear} style={{ fontSize: "8px", padding: "2px 6px", color: "var(--danger)", border: "1px solid var(--danger)", background: "transparent", letterSpacing: "0.1em" }}>
+            <button onClick={() => void handleClear()} style={{ fontSize: "8px", padding: "2px 6px", color: "var(--danger)", border: "1px solid var(--danger)", background: "transparent", letterSpacing: "0.1em" }}>
               CLEAR
             </button>
           </div>
           <div style={{ fontSize: "7px", color: "var(--text-dim)", marginBottom: "6px", letterSpacing: "0.04em", opacity: 0.7 }}>
-            SHA-256 chain · detects structural changes · not forensic-grade
+            SQLite · SHA-256 chain · detects structural changes · not forensic-grade
           </div>
 
           {entries.length === 0 ? (
@@ -123,11 +133,7 @@ export function AuditLog() {
               No audit entries yet.
             </div>
           ) : (
-            <div style={{
-              maxHeight: "180px", overflowY: "auto",
-              background: "#020c10", border: "1px solid var(--border)",
-              padding: "6px 8px",
-            }}>
+            <div style={{ maxHeight: "180px", overflowY: "auto", background: "#020c10", border: "1px solid var(--border)", padding: "6px 8px" }}>
               {entries.map((e, i) => (
                 <div key={i} style={{ fontSize: "9px", lineHeight: "1.7", fontFamily: "monospace" }}>
                   <span style={{ color: "var(--text-dim)" }}>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas";
+import { invoke } from "@tauri-apps/api/core";
 const MAX_PORT_HISTORY = 10;
 import { NmapStatusBar } from "./components/NmapStatusBar";
 import { PanelTabs } from "./components/PanelTabs";
@@ -14,9 +15,8 @@ import type { HostResult, PortEntry, PortFamily, ScanReport, ScanStatus } from "
 import type { PanelTab } from "./stores/uiStore";
 import "./App.css";
 
-// ── Persistence keys ──────────────────────────────────────────────────────────
-const SESSION_KEY = "aegismap:session";
-const SCOPE_KEY   = "aegismap:scope";
+// ── Scope config key (stays in localStorage; no history needed) ──────────────
+const SCOPE_KEY = "aegismap:scope";
 
 // ── Port/host merge logic ──────────────────────────────────────────────────────
 
@@ -89,29 +89,46 @@ export default function App() {
     document.documentElement.classList.toggle("high-contrast", highContrast);
   }, [highContrast]);
 
-  // ── Persistence ──────────────────────────────────────────────────────────────
+  // ── DB init + legacy migration ────────────────────────────────────────────────
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(SESSION_KEY);
-      if (raw) {
-        const { version, hosts } = JSON.parse(raw);
-        if (version === 1 && Array.isArray(hosts)) setSessionHosts(hosts as HostResult[]);
+    void (async () => {
+      // One-shot migration: if SQLite is empty and localStorage has old data, migrate.
+      const needsMigration = await invoke<boolean>("check_migration_needed").catch(() => false);
+      if (needsMigration) {
+        const ls = localStorage.getItem("aegismap:session");
+        const lsSaved = localStorage.getItem("aegismap:saved-sessions");
+        const lsAudit = localStorage.getItem("aegismap:audit");
+        if (ls || lsSaved || lsAudit) {
+          try {
+            await invoke("migrate_from_legacy", {
+              data: {
+                activeSession:  ls      ? JSON.parse(ls)      : null,
+                namedSessions:  lsSaved ? JSON.parse(lsSaved) : null,
+                auditEntries:   lsAudit ? JSON.parse(lsAudit) : null,
+              },
+            });
+            // Clear legacy keys only after successful migration
+            localStorage.removeItem("aegismap:session");
+            localStorage.removeItem("aegismap:saved-sessions");
+            localStorage.removeItem("aegismap:audit");
+          } catch { /* non-critical */ }
+        }
       }
-    } catch { /* corrupt data */ }
+
+      // Load active session from SQLite into local state
+      const hosts = await invoke<HostResult[]>("get_active_session").catch(() => []);
+      if (Array.isArray(hosts) && hosts.length > 0) setSessionHosts(hosts);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Persist active session to SQLite whenever it changes (debounced via setTimeout).
   useEffect(() => {
-    try {
-      if (sessionHosts.length > 0) {
-        localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 1, savedAt: new Date().toISOString(), hosts: sessionHosts }));
-      } else {
-        localStorage.removeItem(SESSION_KEY);
-      }
-      setStorageError(null);
-    } catch (e) {
-      setStorageError("Storage quota exceeded — session may not persist across restarts");
-    }
+    const t = setTimeout(() => {
+      void invoke("save_active_session", { hosts: sessionHosts }).catch(() => {});
+    }, 200);
+    return () => clearTimeout(t);
   }, [sessionHosts]);
 
   useEffect(() => {

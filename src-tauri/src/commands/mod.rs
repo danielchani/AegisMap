@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::db::DbConn;
 use crate::error::AppError;
 use crate::intelligence::http::{HttpProbeRequest, HttpProbeResult};
 use crate::intelligence::tls::{TlsProbeRequest, TlsProbeResult};
@@ -114,4 +115,118 @@ pub fn delete_session(
     id: String,
 ) -> Result<(), AppError> {
     crate::persistence::delete_session(&app_handle, &id)
+}
+
+// ── SQLite active session commands ─────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_active_session(db: tauri::State<'_, DbConn>) -> Result<Vec<serde_json::Value>, AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_session::get_active_session(&conn)
+}
+
+#[tauri::command]
+pub fn save_active_session(
+    db: tauri::State<'_, DbConn>,
+    hosts: Vec<serde_json::Value>,
+) -> Result<(), AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_session::save_active_session(&conn, &hosts)
+}
+
+#[tauri::command]
+pub fn clear_active_session(db: tauri::State<'_, DbConn>) -> Result<(), AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_session::clear_active_session(&conn)
+}
+
+// ── SQLite named session commands ──────────────────────────────────────────────
+
+#[tauri::command]
+pub fn save_named_session(
+    db: tauri::State<'_, DbConn>,
+    name: String,
+    hosts: Vec<serde_json::Value>,
+) -> Result<String, AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_session::save_named_session(&conn, &name, &hosts)
+}
+
+#[tauri::command]
+pub fn load_named_session(
+    db: tauri::State<'_, DbConn>,
+    id: String,
+) -> Result<Vec<serde_json::Value>, AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_session::load_named_session(&conn, &id)
+}
+
+#[tauri::command]
+pub fn list_named_sessions(
+    db: tauri::State<'_, DbConn>,
+) -> Result<Vec<crate::db_session::SessionListing>, AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_session::list_named_sessions(&conn)
+}
+
+#[tauri::command]
+pub fn delete_named_session(
+    db: tauri::State<'_, DbConn>,
+    id: String,
+) -> Result<(), AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_session::delete_named_session(&conn, &id)
+}
+
+// ── Migration commands ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn check_migration_needed(db: tauri::State<'_, DbConn>) -> bool {
+    let conn = db.lock().unwrap();
+    crate::db_session::check_migration_needed(&conn)
+}
+
+#[tauri::command]
+pub fn migrate_from_legacy(
+    db: tauri::State<'_, DbConn>,
+    app_handle: tauri::AppHandle,
+    data: crate::db_migrate::LegacyData,
+) -> Result<crate::db_migrate::MigrationReport, AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_migrate::migrate_from_legacy(&conn, data, &app_handle)
+}
+
+// ── SQLite audit log commands ──────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn append_audit_entry(
+    db: tauri::State<'_, DbConn>,
+    action: String,
+    details: String,
+) -> Result<(), AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_audit::append_entry(&conn, &action, &details)
+}
+
+#[tauri::command]
+pub fn load_audit_entries(
+    db: tauri::State<'_, DbConn>,
+    limit: Option<u32>,
+) -> Result<Vec<crate::db_audit::AuditEntry>, AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_audit::load_entries(&conn, limit)
+}
+
+#[tauri::command]
+pub fn verify_audit_chain(
+    db: tauri::State<'_, DbConn>,
+) -> Result<crate::db_audit::VerifyResult, AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_audit::verify_chain(&conn)
+}
+
+#[tauri::command]
+pub fn clear_audit_log(db: tauri::State<'_, DbConn>) -> Result<(), AppError> {
+    let conn = db.lock().unwrap();
+    crate::db_audit::clear(&conn)
 }

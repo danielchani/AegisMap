@@ -29,6 +29,10 @@ reqwest = { version = "0.12", features = ["rustls-tls"], default-features = fals
 chrono = { version = "0.4", features = ["serde"] }
 which = "6"
 roxmltree = "0"
+# SQLite persistence — bundled so no system library dependency
+rusqlite = { version = "0.32", features = ["bundled"] }
+# SHA-256 for audit log chain (matches frontend crypto.subtle computation)
+sha2 = "0.10"
 # TLS certificate intelligence — raw handshake without OpenSSL
 rustls = { version = "0.23", features = ["ring"] }
 tokio-rustls = "0.26"

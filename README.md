@@ -47,9 +47,9 @@ A desktop network reconnaissance tool built on Tauri 2 + React + Rust. AegisMap 
 | **Session accumulation** | Multiple scans merge hosts by address — no duplicates |
 | **Port merging** | Re-scanning the same host unions port results; version info from latest scan wins |
 | **Port change diff** | NEW / removed ports highlighted after a re-scan |
-| **localStorage persistence** | Active session survives app restarts automatically |
-| **File-based persistence** | Sessions saved as JSON files via Rust IPC to the app data directory with path-traversal-safe ID sanitisation |
-| **Named sessions** | Save, load, and delete named session snapshots via inline UI (no browser dialogs) |
+| **SQLite persistence** | All session data (hosts, ports, tags, notes, probe results, audit log) stored in `aegismap.db` via `rusqlite` — no system SQLite dependency (bundled). Active session survives app restarts automatically. |
+| **Named sessions** | Save, load, and delete named session snapshots via inline UI (no browser dialogs). Stored in SQLite, loaded on demand. |
+| **Legacy migration** | On first launch, existing localStorage sessions and JSON file sessions are automatically migrated to SQLite without data loss. |
 | **Session import** | Import a previously exported JSON file with deep schema validation and input sanitisation; invalid entries rejected with count |
 | **Export JSON / CSV / Markdown** | Three export formats in the actions area |
 | **Per-host remove** | Remove individual hosts without clearing everything |
@@ -210,7 +210,7 @@ All privileged profiles are pre-flight checked before nmap spawns — no silent 
 - **Path-traversal-safe persistence** — session IDs sanitised to alphanumeric, hyphens, and underscores only (max 128 chars); sessions always written inside the platform app-data directory.
 - **Import sanitisation** — deep schema guard on imported host data; HTML tags, control characters, `javascript:` protocol, and event-handler attributes all stripped.
 - **Static advisories** — CVE database and version hints are local static tables. AegisMap makes zero outbound network requests.
-- **105 backend unit tests** — validation (29), profiles (20), preflight (3), intelligence/http (18), intelligence/tls (14), progress parsing (5), XML parsing (10+), nmap (3).
+- **122 backend unit tests** — db_audit (9), db_session (8), validation (29), profiles (20), preflight (3), intelligence/http (18), intelligence/tls (14), progress parsing (5), XML parsing (10+), nmap (3).
 - **58 frontend tests** — risk scoring, scope validation, audit log integrity, CVE lookups, session diffing, and fingerprint confidence.
 
 ---
@@ -287,7 +287,7 @@ AegisMap/
 |---|---|
 | Scheduled re-scan | Needs persistent background timer management |
 | System tray notifications | Needs `tauri-plugin-notification` |
-| SQLite scan history | Needs `tauri-plugin-sql` |
+| Concurrent scans (parallel) | Scan store already supports scan-ID-keyed state; needs Rust `HashMap<id, Child>` |
 | Concurrent scans | Scan store already supports scan-ID-keyed state; needs Rust `HashMap<id, Child>` |
 | Live CVE feed | Requires outbound network permission + NVD/OSV API integration |
 | Network topology mapping | Traceroute integration for hop-by-hop path visualisation |
