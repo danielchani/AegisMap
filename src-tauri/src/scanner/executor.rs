@@ -6,9 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::error::AppError;
 use crate::models::{ScanProfile, ScanRequest};
 use crate::scanner::{
-    nmap, profiles, progress,
+    nmap, preflight, profiles, progress,
     stream::ScanStreamEvent,
-    validation::{self, validate_decoys, validate_nse_scripts, validate_port_range, validate_timing},
+    validation::{self, validate_cidr_scope, validate_decoys, validate_nse_scripts, validate_port_range, validate_timing},
     xml_parser,
 };
 
@@ -63,6 +63,8 @@ pub fn start_scan(
     state: &Arc<ScanState>,
 ) -> Result<(), AppError> {
     let validated = validation::validate_target(&request.target)?;
+    validate_cidr_scope(validated)?;
+    preflight::check_profile_privileges(&request.profile)?;
 
     let nmap_path = nmap::resolve_nmap_path()
         .ok_or_else(|| AppError::NmapNotFound("nmap executable not found".into()))?;
