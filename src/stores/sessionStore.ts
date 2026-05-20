@@ -166,7 +166,7 @@ export const useSessionStore = create<SessionState>()(
         hosts: [], latestReport: null, selectedAddr: null,
         stdoutLines: [], portFilter: null,
       });
-      void invoke("clear_active_session").catch(() => {/* non-critical */});
+      void invoke("clear_active_session").catch((err) => { console.error("[AegisMap] clear_active_session failed:", err); });
       void appendAudit("SESSION_CLEAR", "All session hosts cleared");
     },
 

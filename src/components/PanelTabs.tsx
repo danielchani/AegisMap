@@ -28,7 +28,7 @@ export function PanelTabs({ activeTab, onTabChange, hostCount, hasSelection, fin
       borderBottom: "1px solid var(--border)",
       background: "var(--bg-panel)",
       flexShrink: 0,
-    }}>
+    }} role="tablist">
       {TABS.map(({ key, label, icon, hint }) => {
         const active = activeTab === key;
         const disabled = (key === "results" && hostCount === 0) ||
@@ -36,6 +36,10 @@ export function PanelTabs({ activeTab, onTabChange, hostCount, hasSelection, fin
         return (
           <button
             key={key}
+            role="tab"
+            aria-selected={active}
+            aria-disabled={disabled || undefined}
+            tabIndex={disabled ? -1 : 0}
             onClick={() => !disabled && onTabChange(key)}
             title={hint}
             style={{
@@ -62,7 +66,7 @@ export function PanelTabs({ activeTab, onTabChange, hostCount, hasSelection, fin
             <span>{label}</span>
             {/* Badges */}
             {key === "findings" && findingCount > 0 && (
-              <span style={{ position: "absolute", top: "3px", right: "3px", fontSize: "7px", padding: "0 3px", color: "#f87171", border: "1px solid #f87171", lineHeight: "1.4" }}>
+              <span style={{ position: "absolute", top: "3px", right: "3px", fontSize: "7px", padding: "0 3px", color: "var(--danger)", border: "1px solid var(--danger)", lineHeight: "1.4" }}>
                 {findingCount}
               </span>
             )}
@@ -70,7 +74,7 @@ export function PanelTabs({ activeTab, onTabChange, hostCount, hasSelection, fin
               <span style={{
                 position: "absolute",
                 top: "3px",
-                right: "8px",
+                right: "3px",
                 fontSize: "7px",
                 padding: "0 3px",
                 color: "var(--accent)",

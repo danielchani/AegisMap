@@ -6,7 +6,11 @@ import { FindingsPanel } from "./FindingsPanel";
 import { HostInspector } from "./HostInspector";
 import { ResultsTable } from "./ResultsTable";
 import { ScopeManager } from "./ScopeManager";
+import { SLabel } from "./ui/SLabel";
 import { isInScope } from "../lib/scopeUtils";
+import { appendAudit } from "../lib/auditLog";
+import { listFindings } from "../lib/findings";
+import { PLAYBOOKS, createPlaybookRun, resolveCurrentStep, type PlaybookRun } from "../lib/playbooks";
 import type {
   HostResult, PortFamily, PentestFinding, ScanProfile, ScanReport,
   ScanRequest, ScanStatus, ScanStreamEvent,
@@ -70,12 +74,235 @@ const FILTER_CHIPS: { key: PortFamily; label: string }[] = [
   { key: "db", label: "DB" }, { key: "mail", label: "MAIL" }, { key: "dns", label: "DNS" },
 ];
 
-function SLabel({ children }: { children: React.ReactNode }) {
+// ── PlaybookLauncher ──────────────────────────────────────────────────────────
+
+function PlaybookLauncher({
+  host,
+  onStart,
+}: {
+  host: HostResult;
+  onStart: (run: PlaybookRun) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "9px", letterSpacing: "0.18em", color: "var(--text-dim)", marginBottom: "7px" }}>
-      <span style={{ color: "var(--accent)", opacity: 0.5 }}>◈</span>
-      {children}
-      <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
+    <div style={{ marginTop: "8px" }}>
+      <div
+        style={{
+          display: "flex", alignItems: "center", gap: "8px",
+          fontSize: "9px", letterSpacing: "0.18em", color: "var(--text-dim)",
+          marginBottom: "6px", cursor: "pointer",
+        }}
+        onClick={() => setExpanded((e) => !e)}
+      >
+        <span style={{ color: "var(--accent)", opacity: 0.5 }}>◈</span>
+        PLAYBOOKS
+        <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
+        <span style={{ fontSize: "8px" }}>{expanded ? "▲" : "▼"}</span>
+      </div>
+      {expanded && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+          {PLAYBOOKS.map((pb) => (
+            <button
+              key={pb.id}
+              onClick={() => onStart(createPlaybookRun(pb, host.address))}
+              style={{
+                textAlign: "left", padding: "5px 8px", fontSize: "9px",
+                color: "var(--text-hi)", background: "transparent",
+                border: "1px solid var(--border)", cursor: "pointer",
+                letterSpacing: "0.04em", transition: "all 0.12s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = "var(--accent)";
+                e.currentTarget.style.color = "var(--accent)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = "var(--border)";
+                e.currentTarget.style.color = "var(--text-hi)";
+              }}
+            >
+              <span style={{ marginRight: "6px", opacity: 0.5 }}>▶</span>
+              <strong>{pb.name}</strong>
+              <div style={{ fontSize: "8px", color: "var(--text-dim)", marginTop: "2px" }}>
+                {pb.description}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── PlaybookRunner ────────────────────────────────────────────────────────────
+
+function PlaybookRunner({
+  run,
+  host,
+  busy,
+  onProceed,
+  onSkip,
+  onCancel,
+}: {
+  run: PlaybookRun;
+  host: HostResult | null;
+  busy: boolean;
+  onProceed: () => void;
+  onSkip: () => void;
+  onCancel: () => void;
+}) {
+  const { playbook, currentStep } = run;
+  const totalSteps = playbook.steps.length;
+
+  const { step } = host
+    ? resolveCurrentStep(run, host)
+    : { step: playbook.steps[currentStep] ?? null };
+
+  return (
+    <div style={{ padding: "4px 0" }}>
+      {/* Header */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: "8px",
+        marginBottom: "8px", fontSize: "9px", letterSpacing: "0.12em",
+      }}>
+        <span style={{ color: "var(--accent)", opacity: 0.5 }}>◈</span>
+        <span style={{ color: "var(--accent)", fontWeight: 600 }}>PLAYBOOK</span>
+        <span style={{ color: "var(--text-hi)" }}>{playbook.name}</span>
+        <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
+        <span style={{ color: "var(--text-dim)" }}>
+          Step {Math.min(currentStep + 1, totalSteps)} of {totalSteps}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{ height: "2px", background: "var(--border)", marginBottom: "10px" }}>
+        <div style={{
+          height: "100%",
+          width: `${Math.round(((currentStep) / totalSteps) * 100)}%`,
+          background: "var(--accent)",
+          transition: "width 0.3s ease",
+        }} />
+      </div>
+
+      {run.status === "complete" ? (
+        <div style={{
+          padding: "12px", border: "1px solid var(--accent)", background: "rgba(0,255,170,0.04)",
+          fontSize: "10px", color: "var(--accent)", textAlign: "center",
+        }}>
+          ✓ Playbook complete — review NEXT STEPS for any remaining guidance.
+          <br />
+          <button
+            onClick={onCancel}
+            style={{
+              marginTop: "8px", padding: "3px 12px", fontSize: "9px",
+              color: "var(--text-dim)", border: "1px solid var(--border)",
+              background: "transparent", cursor: "pointer",
+            }}
+          >
+            CLOSE
+          </button>
+        </div>
+      ) : step ? (
+        <div style={{
+          border: `1px solid ${step.type === "active" ? "var(--accent2)" : "var(--border)"}`,
+          borderLeft: `2px solid ${step.type === "active" ? "var(--accent2)" : "var(--text-dim)"}`,
+          padding: "10px", background: "rgba(0,0,0,0.15)",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" }}>
+            <span style={{
+              fontSize: "7px", padding: "1px 5px", letterSpacing: "0.1em",
+              border: `1px solid ${step.type === "active" ? "var(--accent2)" : "var(--text-dim)"}`,
+              color: step.type === "active" ? "var(--accent2)" : "var(--text-dim)",
+            }}>
+              {step.type === "active" ? "ACTIVE" : "PASSIVE"}
+            </span>
+            <span style={{ fontSize: "10px", color: "var(--text-hi)", fontWeight: 600 }}>
+              {step.label}
+            </span>
+          </div>
+          <div style={{
+            fontSize: "9px", color: "var(--text-dim)", lineHeight: 1.5, marginBottom: "8px",
+          }}>
+            {step.description}
+          </div>
+          {step.type === "active" ? (
+            <div style={{ display: "flex", gap: "6px" }}>
+              <button
+                onClick={onProceed}
+                disabled={busy}
+                style={{
+                  flex: 1, padding: "4px 0", fontSize: "9px", letterSpacing: "0.1em",
+                  color: busy ? "var(--text-dim)" : "var(--accent2)",
+                  border: `1px solid ${busy ? "var(--border)" : "var(--accent2)"}`,
+                  background: "transparent", cursor: busy ? "default" : "pointer",
+                }}
+              >
+                {busy ? "RUNNING…" : "PROCEED"}
+              </button>
+              <button
+                onClick={onSkip}
+                disabled={busy}
+                style={{
+                  padding: "4px 10px", fontSize: "9px",
+                  color: "var(--text-dim)", border: "1px solid var(--border)",
+                  background: "transparent", cursor: "pointer",
+                }}
+              >
+                SKIP
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onProceed}
+              style={{
+                width: "100%", padding: "3px 0", fontSize: "9px",
+                color: "var(--text-dim)", border: "1px solid var(--border)",
+                background: "transparent", cursor: "pointer", letterSpacing: "0.08em",
+              }}
+            >
+              NEXT →
+            </button>
+          )}
+        </div>
+      ) : null}
+
+      {/* Step list */}
+      <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "2px" }}>
+        {playbook.steps.map((s, i) => {
+          const done    = i < currentStep;
+          const current = i === currentStep;
+          const skipped = run.skippedSteps.has(s.id);
+          return (
+            <div key={s.id} style={{
+              display: "flex", alignItems: "center", gap: "6px",
+              fontSize: "8px", color: done ? "var(--success, #4ade80)" : current ? "var(--text-hi)" : "var(--text-dim)",
+              padding: "2px 0", opacity: skipped ? 0.4 : 1,
+            }}>
+              <span style={{ width: "10px", flexShrink: 0 }}>
+                {done ? "✓" : current ? "›" : "○"}
+              </span>
+              <span>{s.label}</span>
+              {s.type === "active" && !done && (
+                <span style={{ fontSize: "7px", color: "var(--accent2)", opacity: 0.6 }}>[active]</span>
+              )}
+              {skipped && (
+                <span style={{ fontSize: "7px", color: "var(--text-dim)" }}>[skipped]</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Cancel */}
+      <button
+        onClick={onCancel}
+        style={{
+          marginTop: "10px", width: "100%", padding: "3px 0", fontSize: "8px",
+          color: "var(--text-dim)", border: "1px solid var(--border)",
+          background: "transparent", cursor: "pointer", letterSpacing: "0.1em",
+        }}
+      >
+        ✕ CANCEL PLAYBOOK
+      </button>
     </div>
   );
 }
@@ -107,6 +334,7 @@ export function ScannerPanel({
   const [sourcePort,    setSourcePort]   = useState("");
   const [selectedScripts, setSelectedScripts] = useState<Set<string>>(new Set());
   const [errorMsg,      setErrorMsg]     = useState<string | null>(null);
+  const [activePbRun,   setActivePbRun]  = useState<PlaybookRun | null>(null);
   const [logLines,      setLogLines]     = useState<string[]>([]);
   const [progress,      setProgress]     = useState<number | null>(null);
   const [eta,           setEta]          = useState<number | null>(null);
@@ -203,11 +431,54 @@ export function ScannerPanel({
   }
 
   const handleStart  = () => runScan(target, profile);
-  const handleRescan = (address: string) => runScan(address, profile, true);
+  const handleRescan = (address: string, suggestedProfile?: ScanProfile) =>
+    runScan(address, suggestedProfile ?? profile, true);
+
+  // ── Playbook execution ────────────────────────────────────────────────────
+  const handlePbProceed = () => {
+    if (!activePbRun || !selectedHost) return;
+    const { step, isLastStep } = resolveCurrentStep(activePbRun, selectedHost);
+    if (!step) {
+      setActivePbRun((r) => r ? { ...r, status: "complete" } : r);
+      return;
+    }
+
+    void appendAudit("PLAYBOOK_STEP", `${activePbRun.playbook.name} · ${step.label} · ${selectedHost.address}`);
+
+    if (step.action?.type === "scan") {
+      runScan(selectedHost.address, step.action.profile, true);
+    } else if (step.action?.type === "probe") {
+      const openPorts = selectedHost.ports.filter((p) => p.state === "open");
+      if (step.action.probeType === "http") {
+        const webPort = openPorts.find((p) => [80,443,8080,8443,8000,3000,5000,9000].includes(p.port));
+        // Probe is triggered naturally when user is in HostInspector; just advance
+        if (!webPort) setActivePbRun((r) => r ? { ...r, skippedSteps: new Set([...r.skippedSteps, step.id]) } : r);
+      }
+    }
+
+    const nextStep = activePbRun.currentStep + 1;
+    if (nextStep >= activePbRun.playbook.steps.length || isLastStep) {
+      setActivePbRun((r) => r ? { ...r, currentStep: nextStep, status: "complete" } : r);
+    } else {
+      setActivePbRun((r) => r ? { ...r, currentStep: nextStep } : r);
+    }
+  };
+
+  const handlePbSkip = () => {
+    if (!activePbRun) return;
+    const step = activePbRun.playbook.steps[activePbRun.currentStep];
+    const nextStep = activePbRun.currentStep + 1;
+    const skippedSteps = new Set([...activePbRun.skippedSteps, ...(step ? [step.id] : [])]);
+    if (nextStep >= activePbRun.playbook.steps.length) {
+      setActivePbRun((r) => r ? { ...r, currentStep: nextStep, skippedSteps, status: "complete" } : r);
+    } else {
+      setActivePbRun((r) => r ? { ...r, currentStep: nextStep, skippedSteps } : r);
+    }
+  };
 
   async function handleCancel() {
     onStatusChange("cancelling");
-    try { await invoke("cancel_scan"); } catch { /* best-effort */ }
+    try { await invoke("cancel_scan"); } catch (err) { console.error("[AegisMap] cancel_scan failed:", err); }
   }
 
   // ── Export helpers ───────────────────────────────────────────────────────────
@@ -339,7 +610,7 @@ export function ScannerPanel({
     <div style={{ display: "flex", flexDirection: "column", gap: "1rem", padding: "0 0 1.5rem" }}>
 
       {/* Attack surface dashboard — visible on scan & results tabs */}
-      {(showScan || showResults) && has && report && <AttackSurface hosts={report.hosts} onPrint={onPrint} />}
+      {(showScan || showResults) && has && report && <AttackSurface hosts={report.hosts} onPrint={onPrint} findings={findings} />}
 
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem", padding: "1rem 1rem 0" }}>
 
@@ -608,7 +879,7 @@ export function ScannerPanel({
         )}
 
         {report && report.hosts.length > 0 && (
-          <ResultsTable report={report} selectedAddress={selectedHost?.address ?? null} onSelect={onSelectHost} onRemoveHost={onRemoveHost} />
+          <ResultsTable report={report} selectedAddress={selectedHost?.address ?? null} onSelect={onSelectHost} onRemoveHost={onRemoveHost} findings={findings} />
         )}
 
         {!has && (
@@ -629,8 +900,32 @@ export function ScannerPanel({
 
       {/* ═══════════ INSPECT TAB ═══════════ */}
       {showInspect && <>
-        {selectedHost ? (
-          <HostInspector host={selectedHost} onRescan={handleRescan} isBusy={busy} onUpdateHost={onUpdateHost} />
+        {activePbRun ? (
+          <PlaybookRunner
+            run={activePbRun}
+            host={selectedHost}
+            busy={busy}
+            onProceed={handlePbProceed}
+            onSkip={handlePbSkip}
+            onCancel={() => setActivePbRun(null)}
+          />
+        ) : selectedHost ? (
+          <>
+            <HostInspector
+              host={selectedHost}
+              onRescan={handleRescan}
+              isBusy={busy}
+              onUpdateHost={onUpdateHost}
+              findings={findings}
+              onFindingCreated={() => {
+                void listFindings("active").then((loaded) => onFindingsChange?.(loaded));
+              }}
+            />
+            <PlaybookLauncher
+              host={selectedHost}
+              onStart={(run) => setActivePbRun(run)}
+            />
+          </>
         ) : (
           <div style={{ padding: "2rem 0", textAlign: "center", fontSize: "11px", color: "var(--text-dim)" }}>
             Select a host from the 3D view or the results table to inspect.

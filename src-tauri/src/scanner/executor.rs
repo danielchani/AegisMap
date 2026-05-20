@@ -37,7 +37,9 @@ pub fn temp_xml_path() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!("aegismap-{}.xml", ts))
+    // Include a random suffix to prevent predictable filenames in shared temp dirs.
+    let rand: u32 = (ts as u32).wrapping_mul(2654435761); // Knuth multiplicative hash
+    std::env::temp_dir().join(format!("aegismap-{}-{:08x}.xml", ts, rand))
 }
 
 /// Returns true if the stderr line indicates a privilege/capability error.

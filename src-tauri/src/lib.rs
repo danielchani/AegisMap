@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri::Manager as _;
 use scanner::executor::ScanState;
+use intelligence::cve::CveRateState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -27,16 +28,20 @@ pub fn run() {
                     app.manage(Arc::new(Mutex::new(conn)) as db::DbConn);
                 }
                 Err(e) => {
-                    eprintln!("[AegisMap] Database init failed: {e} — running without persistence");
-                    // Provide a fallback in-memory DB so the app doesn't crash.
+                    eprintln!("[AegisMap] Database init failed: {e} — running with in-memory fallback (data will not persist)");
+                    // Provide a fallback in-memory DB with schema applied so
+                    // commands don't hit missing-table errors.
                     let fallback = rusqlite::Connection::open_in_memory()
                         .expect("in-memory fallback");
+                    fallback.execute_batch(db::SCHEMA_SQL)
+                        .expect("in-memory schema init");
                     app.manage(Arc::new(Mutex::new(fallback)) as db::DbConn);
                 }
             }
             Ok(())
         })
         .manage(ScanState::new())
+        .manage(CveRateState::new())
         .invoke_handler(tauri::generate_handler![
             // Nmap scan
             commands::detect_nmap,
@@ -46,6 +51,7 @@ pub fn run() {
             // Intelligence probes
             commands::probe_http,
             commands::probe_tls,
+            commands::dns_query,
             // Active session (SQLite)
             commands::get_active_session,
             commands::save_active_session,
@@ -76,6 +82,11 @@ pub fn run() {
             commands::load_session,
             commands::list_sessions,
             commands::delete_session,
+            // Live CVE lookup (NVD API v2)
+            commands::fetch_live_cves,
+            commands::cve_rate_status,
+            commands::set_nvd_api_key,
+            commands::get_nvd_api_key_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

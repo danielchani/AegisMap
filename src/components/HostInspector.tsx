@@ -5,11 +5,17 @@ import { getVersionAdvisory } from "../data/knownVersions";
 import { createFindingFromAdvisory, createFindingFromScript } from "../lib/findings";
 import { formatScanAge, useNow } from "../hooks/useScanAge";
 import { hostRiskLevel, RISK_COLOR, RISK_LABEL } from "../lib/riskScore";
+import { calculateConfidence } from "../lib/fingerprint";
+import { generateHostSuggestions, type SuggestionAction } from "../lib/suggestions";
 import type {
-  CertInfo, HostResult, HttpProbeRequest, HttpProbeResult,
-  PortEntry, ScanProfile, SecurityHeaders, TlsProbeRequest,
+  CertInfo, DnsQueryRequest, DnsQueryResult, HostResult,
+  HttpProbeRequest, HttpProbeResult,
+  PentestFinding, PortEntry, ScanProfile, SecurityHeaders, TlsProbeRequest,
   TlsProbeResult, WorkflowStatus,
 } from "../types";
+import { WEB_PORTS, TLS_PORTS, portColor } from "../lib/ports";
+import { SLabel } from "./ui/SLabel";
+import { LiveCveLookup } from "./LiveCveLookup";
 
 // Session ID injected when findings integration is active
 const ACTIVE_SESSION_ID = "active";
@@ -19,6 +25,8 @@ interface Props {
   onRescan?: (address: string, profile?: ScanProfile) => void;
   isBusy?: boolean;
   onUpdateHost?: (address: string, patch: Partial<HostResult>) => void;
+  findings?: PentestFinding[];
+  onFindingCreated?: () => void;
 }
 
 const WORKFLOW: { key: WorkflowStatus; label: string; color: string }[] = [
@@ -28,8 +36,6 @@ const WORKFLOW: { key: WorkflowStatus; label: string; color: string }[] = [
   { key: "vulnerable", label: "VULN",   color: "#f87171" },
   { key: "mitigated",  label: "MITIG",  color: "#6b7280" },
 ];
-
-const WEB_PORTS = new Set([80, 443, 8080, 8443, 8000, 8888, 3000, 4443, 5000, 9000]);
 
 function statusColor(code: number | undefined): string {
   if (!code) return "var(--text-dim)";
@@ -51,27 +57,6 @@ const SEC_HEADER_LABELS: { key: keyof SecurityHeaders; label: string }[] = [
   { key: "crossOriginResourcePolicy", label: "CORP" },
   { key: "crossOriginEmbedderPolicy", label: "COEP" },
 ];
-
-function portColor(port: number): string {
-  if ([22, 2222, 222].includes(port))                                  return "#4ade80";
-  if ([80, 443, 8080, 8443, 8000, 3000, 5000, 9000].includes(port))   return "#38bdf8";
-  if ([21, 20, 990].includes(port))                                    return "#a78bfa";
-  if ([25, 465, 587, 143, 993, 110, 995].includes(port))              return "#fbbf24";
-  if ([3306, 5432, 1433, 1521, 27017, 6379, 5984].includes(port))     return "#fb923c";
-  if ([53, 5353].includes(port))                                       return "#e879f9";
-  if ([445, 139, 135].includes(port))                                  return "#94a3b8";
-  return "#67e8f9";
-}
-
-function SLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "9px", letterSpacing: "0.18em", color: "var(--text-dim)", marginBottom: "6px" }}>
-      <span style={{ color: "var(--accent)", opacity: 0.5 }}>◈</span>
-      {children}
-      <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
-    </div>
-  );
-}
 
 function Sparkline({ history }: { history: { ts: string; open: number }[] }) {
   if (history.length < 2) return null;
@@ -141,12 +126,23 @@ function CertCard({ cert, isLeaf }: { cert: CertInfo; isLeaf: boolean }) {
   );
 }
 
-export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
+function DnsRow({ label, values, mono }: { label: string; values: string[]; mono?: boolean }) {
+  return (
+    <div style={{ display: "flex", gap: "6px", marginBottom: "3px", fontSize: "9px" }}>
+      <span style={{ color: "#e879f9", letterSpacing: "0.08em", minWidth: "36px", flexShrink: 0 }}>{label}</span>
+      <span style={{ color: "var(--text-hi)", fontFamily: mono ? "monospace" : undefined, wordBreak: "break-all" }}>
+        {values.join(", ")}
+      </span>
+    </div>
+  );
+}
+
+export function HostInspector({ host, onRescan, isBusy, onUpdateHost, findings, onFindingCreated }: Props) {
   const openPorts = host.ports.filter((p) => p.state === "open");
   const up        = host.status === "up";
   const now       = useNow();
   const { label: ageLabel, isStale } = formatScanAge(host.scannedAt, now);
-  const risk = hostRiskLevel(host);
+  const risk = hostRiskLevel(host, findings);
   const wfState = host.workflowStatus;
 
   const [tagInput,      setTagInput]     = useState("");
@@ -156,6 +152,8 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
   const [probeError,    setProbeError]      = useState<string | null>(null);
   const [tlsProbingPorts, setTlsProbingPorts] = useState<Set<number>>(new Set());
   const [tlsProbeError,   setTlsProbeError]   = useState<string | null>(null);
+  const [dnsQuerying,     setDnsQuerying]     = useState(false);
+  const [dnsError,        setDnsError]        = useState<string | null>(null);
 
   const webPorts = openPorts.filter(
     (p) => WEB_PORTS.has(p.port) ||
@@ -194,7 +192,6 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
     }
   }
 
-  const TLS_PORTS = new Set([443, 8443, 4443, 636, 993, 995, 465, 5986, 8883]);
   const tlsPorts = openPorts.filter(
     (p) => TLS_PORTS.has(p.port) ||
            p.service.toLowerCase().includes("https") ||
@@ -226,6 +223,26 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
       setTlsProbeError(typeof err === "string" ? err : JSON.stringify(err));
     } finally {
       setTlsProbingPorts((prev) => { const n = new Set(prev); n.delete(p.port); return n; });
+    }
+  }
+
+  async function handleDnsQuery() {
+    setDnsQuerying(true);
+    setDnsError(null);
+    try {
+      const result = await invoke<DnsQueryResult>("dns_query", {
+        request: {
+          address: host.address,
+          timeoutSecs: 10,
+        } satisfies DnsQueryRequest,
+      });
+      onUpdateHost?.(host.address, {
+        dnsResults: [...(host.dnsResults ?? []), result],
+      });
+    } catch (err) {
+      setDnsError(typeof err === "string" ? err : JSON.stringify(err));
+    } finally {
+      setDnsQuerying(false);
     }
   }
 
@@ -419,6 +436,11 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
             })}
           </div>
         </>
+      )}
+
+      {/* LIVE CVE LOOKUP — per-product opt-in NVD query */}
+      {onUpdateHost && (
+        <LiveCveLookup host={host} onFindingCreated={onFindingCreated} />
       )}
 
       {/* HTTP PROBE — buttons to trigger surface probes on detected web ports */}
@@ -642,6 +664,130 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
         </div>
       )}
 
+      {/* DNS INTELLIGENCE — opt-in per-host query */}
+      {onUpdateHost && (
+        <div style={{ marginTop: "8px" }}>
+          <SLabel>DNS INTELLIGENCE <span style={{ fontSize: "8px", fontWeight: 400, opacity: 0.6 }}>(opt-in)</span></SLabel>
+          <button
+            onClick={() => void handleDnsQuery()}
+            disabled={dnsQuerying}
+            style={{
+              padding: "3px 8px", fontSize: "9px", letterSpacing: "0.08em",
+              color: dnsQuerying ? "var(--text-dim)" : "#e879f9",
+              border: `1px solid ${dnsQuerying ? "var(--border)" : "#e879f9"}`,
+              background: dnsQuerying ? "transparent" : "rgba(232,121,249,0.06)",
+              cursor: dnsQuerying ? "default" : "pointer", transition: "all 0.12s",
+            }}
+          >
+            {dnsQuerying ? "QUERYING…" : "◎ DNS QUERY"}
+          </button>
+          {dnsError && (
+            <div style={{ marginTop: "4px", fontSize: "9px", color: "var(--danger)" }}>{dnsError}</div>
+          )}
+        </div>
+      )}
+
+      {/* DNS results — newest first */}
+      {(host.dnsResults?.length ?? 0) > 0 && (
+        <div style={{ marginTop: "8px" }}>
+          <SLabel>DNS RECORDS ({host.dnsResults!.length})</SLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            {[...host.dnsResults!].reverse().map((dns, i) => {
+              const hasMismatch = dns.forwardVerified === false;
+              return (
+                <div
+                  key={i}
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderLeft: `2px solid ${dns.error ? "var(--danger)" : hasMismatch ? "var(--warning)" : "#e879f9"}`,
+                    padding: "7px 10px", fontSize: "10px",
+                    background: "rgba(0,0,0,0.15)",
+                  }}
+                >
+                  {/* Header row */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "5px" }}>
+                    <span style={{ fontFamily: "monospace", fontSize: "10px", color: "#e879f9", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {dns.address}
+                    </span>
+                    {dns.forwardVerified === true && (
+                      <span style={{ fontSize: "7px", padding: "0 4px", color: "var(--success, #4ade80)", border: "1px solid var(--success, #4ade80)", flexShrink: 0 }}>
+                        ✓ VERIFIED
+                      </span>
+                    )}
+                    {dns.forwardVerified === false && (
+                      <span style={{ fontSize: "7px", padding: "0 4px", color: "var(--warning)", border: "1px solid var(--warning)", flexShrink: 0 }}>
+                        ✗ PTR MISMATCH
+                      </span>
+                    )}
+                    <button
+                      onClick={() => onUpdateHost?.(host.address, { dnsResults: host.dnsResults!.filter((_, idx) => idx !== (host.dnsResults!.length - 1 - i)) })}
+                      title="Dismiss"
+                      style={{ flexShrink: 0, background: "transparent", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: "14px", lineHeight: 1, padding: "0 2px", opacity: 0.6 }}
+                    >×</button>
+                  </div>
+
+                  {/* Error */}
+                  {dns.error && (
+                    <div style={{ color: "var(--danger)", fontSize: "9px", marginBottom: "4px" }}>✗ {dns.error}</div>
+                  )}
+
+                  {/* PTR mismatch +F button */}
+                  {hasMismatch && onUpdateHost && (
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                      <span style={{ fontSize: "9px", color: "var(--warning)" }}>⚠ PTR → forward A does not match this IP</span>
+                      <button
+                        title="Create finding from PTR mismatch"
+                        onClick={() => void createFindingFromAdvisory({
+                          sessionId: ACTIVE_SESSION_ID,
+                          hostAddress: host.address,
+                          portRef: "53/udp",
+                          product: "DNS",
+                          version: "",
+                          advisoryType: "update",
+                          message: `PTR record for ${host.address} (${dns.ptrRecords.join(", ")}) does not forward-verify back to the original IP. Possible CDN, shared hosting, or misconfiguration.`,
+                        })}
+                        style={{ fontSize: "7px", padding: "0 4px", color: "var(--warning)", border: "1px solid var(--warning)", background: "transparent", cursor: "pointer", letterSpacing: "0.06em", flexShrink: 0 }}
+                      >+F</button>
+                    </div>
+                  )}
+
+                  {/* PTR records */}
+                  {dns.ptrRecords.length > 0 && (
+                    <DnsRow label="PTR" values={dns.ptrRecords} />
+                  )}
+                  {dns.ptrRecords.length === 0 && dns.aRecords.length === 0 && dns.aaaaRecords.length === 0 && !dns.error && (
+                    <div style={{ fontSize: "9px", color: "var(--text-dim)" }}>No PTR record found</div>
+                  )}
+
+                  {/* A / AAAA */}
+                  {dns.aRecords.length > 0 && <DnsRow label="A" values={dns.aRecords} />}
+                  {dns.aaaaRecords.length > 0 && <DnsRow label="AAAA" values={dns.aaaaRecords} />}
+
+                  {/* CNAME chain */}
+                  {dns.cnameChain.length > 0 && <DnsRow label="CNAME" values={dns.cnameChain} />}
+
+                  {/* MX records */}
+                  {dns.mxRecords.length > 0 && (
+                    <DnsRow label="MX" values={dns.mxRecords.map((m) => `${m.preference} ${m.exchange}`)} />
+                  )}
+
+                  {/* NS records */}
+                  {dns.nsRecords.length > 0 && <DnsRow label="NS" values={dns.nsRecords} />}
+
+                  {/* TXT records */}
+                  {dns.txtRecords.length > 0 && <DnsRow label="TXT" values={dns.txtRecords} mono />}
+
+                  {/* Timestamp */}
+                  <div style={{ fontSize: "8px", color: "var(--text-dim)", marginTop: "4px" }}>
+                    queried {new Date(dns.queriedAt).toLocaleTimeString()}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* NSE script results */}
       {(host.script_results?.length ?? 0) > 0 && (
         <div style={{ marginTop: "8px" }}>
@@ -665,6 +811,101 @@ export function HostInspector({ host, onRescan, isBusy, onUpdateHost }: Props) {
           </div>
         </div>
       )}
+
+      {/* ── NEXT STEPS — rule-based strategy suggestions ─────────────────── */}
+      {onUpdateHost && (() => {
+        const confidence = calculateConfidence(host);
+        const suggestions = generateHostSuggestions(host, confidence);
+        if (suggestions.length === 0) return null;
+
+        const PRIORITY_GLYPH: Record<string, string> = {
+          high: "⬆", medium: "■", low: "▽",
+        };
+        const PRIORITY_COLOR: Record<string, string> = {
+          high: "var(--danger, #ef4444)",
+          medium: "var(--warning, #fbbf24)",
+          low: "var(--text-dim)",
+        };
+
+        const handleSuggestionAction = (action: SuggestionAction) => {
+          if (action.type === "rescan" && onRescan) {
+            onRescan(host.address, action.profile);
+          } else if (action.type === "probe") {
+            if (action.probeType === "http") {
+              const webPort = openPorts.find(
+                (p) => [80, 443, 8080, 8443, 8000, 3000, 5000, 9000].includes(p.port),
+              );
+              if (webPort) void handleProbeHttp(webPort);
+            } else if (action.probeType === "tls") {
+              const tlsPort = openPorts.find(
+                (p) => [443, 8443, 4443, 636, 993, 995, 465].includes(p.port) ||
+                  p.service.toLowerCase().includes("https") ||
+                  p.service.toLowerCase().includes("ssl"),
+              );
+              if (tlsPort) void handleProbeTls(tlsPort);
+            } else if (action.probeType === "dns") {
+              void handleDnsQuery();
+            }
+          }
+          // "navigate" and "create_finding" are informational only in this context
+        };
+
+        return (
+          <div style={{ marginTop: "8px" }}>
+            <SLabel>
+              NEXT STEPS ({suggestions.length})
+              <span style={{ fontSize: "7px", fontWeight: 400, opacity: 0.5, marginLeft: "4px" }}>
+                analyst guidance
+              </span>
+            </SLabel>
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              {suggestions.map((s) => (
+                <div
+                  key={s.id}
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderLeft: `2px solid ${PRIORITY_COLOR[s.priority]}`,
+                    padding: "6px 8px",
+                    background: "rgba(0,0,0,0.12)",
+                    fontSize: "10px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: "6px", marginBottom: "3px" }}>
+                    <span style={{ fontSize: "8px", color: PRIORITY_COLOR[s.priority], flexShrink: 0, marginTop: "1px" }}>
+                      {PRIORITY_GLYPH[s.priority]} {s.priority.toUpperCase()}
+                    </span>
+                    <span style={{ flex: 1, color: "var(--text-hi)", fontWeight: 500, fontSize: "10px" }}>
+                      {s.title}
+                    </span>
+                    {s.action && (s.action.type === "rescan" || s.action.type === "probe") && (
+                      <button
+                        onClick={() => handleSuggestionAction(s.action!)}
+                        disabled={isBusy}
+                        style={{
+                          flexShrink: 0, padding: "1px 6px", fontSize: "8px",
+                          color: "var(--accent)", border: "1px solid var(--accent)",
+                          background: "transparent", cursor: isBusy ? "default" : "pointer",
+                          letterSpacing: "0.06em",
+                        }}
+                      >
+                        {s.action.type === "rescan" ? "SCAN" : "PROBE"}
+                      </button>
+                    )}
+                    {s.action && (s.action.type === "navigate" || s.action.type === "create_finding") && (
+                      <span style={{ flexShrink: 0, fontSize: "7px", color: "var(--text-dim)", letterSpacing: "0.06em", marginTop: "2px" }}>
+                        {s.action.type === "navigate" ? `→ ${s.action.tab}` : "→ findings"}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: "9px", color: "var(--text-dim)", lineHeight: 1.4 }}>
+                    {s.rationale}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Notes editor */}
       {onUpdateHost && (

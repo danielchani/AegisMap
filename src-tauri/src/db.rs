@@ -7,7 +7,7 @@ pub type DbConn = Arc<Mutex<rusqlite::Connection>>;
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 
-const SCHEMA_SQL: &str = r#"
+pub const SCHEMA_SQL: &str = r#"
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS hosts (
     http_probes     TEXT,       -- JSON HttpProbeResult[]
     tls_probes      TEXT,       -- JSON TlsProbeResult[]
     script_results  TEXT,       -- JSON ScriptResult[]
+    dns_results     TEXT,       -- JSON DnsQueryResult[]
     UNIQUE(session_id, address)
 );
 
@@ -73,9 +74,9 @@ CREATE TABLE IF NOT EXISTS findings (
     id                TEXT PRIMARY KEY,
     session_id        TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     title             TEXT NOT NULL,
-    severity          TEXT NOT NULL,       -- info/low/medium/high/critical
-    confidence        TEXT NOT NULL,       -- observed/heuristic/candidate/confirmed
-    status            TEXT NOT NULL DEFAULT 'draft',
+    severity          TEXT NOT NULL CHECK(severity IN ('info','low','medium','high','critical')),
+    confidence        TEXT NOT NULL CHECK(confidence IN ('observed','heuristic','candidate','confirmed')),
+    status            TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','needs_review','confirmed','false_positive','accepted_risk','remediated')),
     affected_hosts    TEXT NOT NULL,       -- JSON string[]
     affected_ports    TEXT,               -- JSON string[]
     summary           TEXT NOT NULL,
@@ -108,6 +109,21 @@ CREATE INDEX IF NOT EXISTS idx_tags_host        ON host_tags(host_id);
 CREATE INDEX IF NOT EXISTS idx_audit_ts         ON audit_log(timestamp);
 CREATE INDEX IF NOT EXISTS idx_findings_session ON findings(session_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_finding ON evidence(finding_id);
+
+-- Key-value settings store (e.g. NVD API key)
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- CVE lookup cache — keyed by normalised product name, 24 h TTL
+CREATE TABLE IF NOT EXISTS cve_cache (
+    product_key TEXT PRIMARY KEY,
+    fetched_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    entry_count INTEGER NOT NULL DEFAULT 0,
+    data        TEXT NOT NULL  -- JSON array of LiveCveEntry
+);
 "#;
 
 // ── Connection factory ────────────────────────────────────────────────────────
@@ -139,6 +155,10 @@ pub fn open_db(app: &tauri::AppHandle) -> Result<rusqlite::Connection, AppError>
         [],
     )
     .map_err(|e| AppError::DatabaseError(format!("schema_version insert: {e}")))?;
+
+    // Safe additive migration: adds dns_results column to existing databases.
+    // Silently ignored if the column already exists (fresh installs have it from SCHEMA_SQL).
+    conn.execute_batch("ALTER TABLE hosts ADD COLUMN dns_results TEXT;").ok();
 
     Ok(conn)
 }

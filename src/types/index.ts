@@ -79,6 +79,7 @@ export interface HostResult {
   portHistory?:    { ts: string; open: number }[]; // open-port count over time (last 10)
   httpProbes?:     HttpProbeResult[];             // opt-in HTTP surface probes (frontend-only)
   tlsProbes?:      TlsProbeResult[];             // opt-in TLS certificate probes (frontend-only)
+  dnsResults?:     DnsQueryResult[];             // opt-in DNS enrichment queries (frontend-only)
 }
 
 export interface ScanReport {
@@ -279,9 +280,81 @@ export interface TlsProbeRequest {
   sniOverride?: string;
 }
 
+/** Active visual mode of the 3D scene. */
+export type SceneMode = "network" | "diff" | "confidence";
+
 export interface NmapStatus {
   installed: boolean;
   executablePath?: string;
   version?: string;
   error?: string;
+}
+
+// ── Native DNS intelligence ───────────────────────────────────────────────────
+
+export interface MxRecord {
+  preference: number;
+  exchange: string;
+}
+
+export interface DnsQueryResult {
+  address: string;
+  /** PTR hostnames for an IP input. */
+  ptrRecords: string[];
+  /** IPv4 addresses. */
+  aRecords: string[];
+  /** IPv6 addresses. */
+  aaaaRecords: string[];
+  /** CNAME chain (intermediate canonical names). */
+  cnameChain: string[];
+  /** MX records sorted by preference (lowest first). */
+  mxRecords: MxRecord[];
+  /** Authoritative name servers. */
+  nsRecords: string[];
+  /** TXT record values (SPF, DMARC, etc.). */
+  txtRecords: string[];
+  /**
+   * For IP inputs: did any PTR hostname forward-verify back to the original IP?
+   * `undefined` when no PTR records were found.
+   */
+  forwardVerified?: boolean;
+  /** Embedded error from DNS resolution — populated on failure. */
+  error?: string;
+  queriedAt: string;
+}
+
+export interface DnsQueryRequest {
+  address: string;
+  timeoutSecs: number;
+}
+
+// ── Live CVE feed (NVD API v2) ────────────────────────────────────────────────
+
+/** A single validated CVE entry returned from the NVD API or its SQLite cache. */
+export interface LiveCveEntry {
+  cveId: string;
+  published: string;
+  lastModified: string;
+  /** English description, truncated to 2 000 chars by the backend. */
+  description: string;
+  cvssV3Score?: number;
+  /** CRITICAL | HIGH | MEDIUM | LOW | NONE */
+  cvssV3Severity?: string;
+  cvssV2Score?: number;
+  /** HTTPS-only reference URLs, max 10. */
+  references: string[];
+}
+
+export interface CveFetchResult {
+  productKey: string;
+  entries: LiveCveEntry[];
+  fetchedAt: string;
+  expiresAt: string;
+  fromCache: boolean;
+  totalAvailable: number;
+}
+
+export interface CveRateStatus {
+  millisUntilReady: number;
+  hasApiKey: boolean;
 }

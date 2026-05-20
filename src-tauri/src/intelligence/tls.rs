@@ -21,7 +21,10 @@ pub struct TlsProbeRequest {
     pub port: u16,
     /// Request timeout in seconds (1–30). Applied to both TCP connect and TLS handshake.
     pub timeout_secs: u8,
-    /// Accept self-signed / expired certificates — on by default for pentest use.
+    /// Note: the TLS probe always accepts all certificates (including self-signed
+    /// and expired) via a custom CapturingVerifier — this is intentional for
+    /// pentest reconnaissance. This field is retained for API symmetry with the
+    /// HTTP probe but has no effect on connection behaviour.
     pub accept_invalid_certs: bool,
     /// Optional hostname to use as the TLS SNI (Server Name Indication) value.
     /// When probing an IP address, set this to the known hostname so the server

@@ -20,7 +20,7 @@ export function PrintReport({ report, sessionHosts, findings = [] }: Props) {
   const now  = new Date().toLocaleString();
   const total = sessionHosts.reduce((s, h) => s + h.ports.filter((p) => p.state === "open").length, 0);
   const riskCounts = Object.fromEntries(RISK_ORDER.map((r) => [r, 0])) as Record<string, number>;
-  sessionHosts.forEach((h) => { riskCounts[hostRiskLevel(h)]++; });
+  sessionHosts.forEach((h) => { riskCounts[hostRiskLevel(h, findings)]++; });
 
   // Weighted score
   const score = Math.min(100, Math.round(
@@ -112,7 +112,7 @@ export function PrintReport({ report, sessionHosts, findings = [] }: Props) {
       {/* Per-host findings */}
       {sessionHosts.map((host) => {
         const open = host.ports.filter((p) => p.state === "open");
-        const risk = hostRiskLevel(host);
+        const risk = hostRiskLevel(host, findings);
         const cveSummary = hostCVESummary(host.ports);
         const confidence = calculateConfidence(host);
         const riskColors: Record<string, string> = { critical: "#e11d48", high: "#f87171", medium: "#fb923c", low: "#a3e635", clean: "#4ade80" };

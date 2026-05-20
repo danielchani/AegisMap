@@ -56,8 +56,8 @@ fn save_host(
     conn.execute(
         "INSERT INTO hosts
            (session_id, address, hostname, status, scanned_at, workflow_status, notes,
-            port_history, ports_diff, http_probes, tls_probes, script_results)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+            port_history, ports_diff, http_probes, tls_probes, script_results, dns_results)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
          ON CONFLICT(session_id, address) DO UPDATE SET
            hostname        = excluded.hostname,
            status          = excluded.status,
@@ -68,7 +68,8 @@ fn save_host(
            ports_diff      = excluded.ports_diff,
            http_probes     = excluded.http_probes,
            tls_probes      = excluded.tls_probes,
-           script_results  = excluded.script_results",
+           script_results  = excluded.script_results,
+           dns_results     = excluded.dns_results",
         rusqlite::params![
             session_id,
             address,
@@ -82,6 +83,7 @@ fn save_host(
             json_opt(&host["httpProbes"]),
             json_opt(&host["tlsProbes"]),
             json_opt(&host["script_results"]),
+            json_opt(&host["dnsResults"]),
         ],
     )
     .map_err(|e| AppError::DatabaseError(format!("upsert host {address}: {e}")))?;
@@ -172,11 +174,12 @@ fn load_hosts_for_session(
         notes: Option<String>, port_history: Option<String>,
         ports_diff: Option<String>, http_probes: Option<String>,
         tls_probes: Option<String>, script_results: Option<String>,
+        dns_results: Option<String>,
     }
 
     let mut stmt = conn.prepare(
         "SELECT id, address, hostname, status, scanned_at, workflow_status, notes,
-                port_history, ports_diff, http_probes, tls_probes, script_results
+                port_history, ports_diff, http_probes, tls_probes, script_results, dns_results
          FROM hosts WHERE session_id = ?1 ORDER BY id",
     )
     .map_err(|e| AppError::DatabaseError(format!("prepare hosts: {e}")))?;
@@ -200,6 +203,7 @@ fn load_hosts_for_session(
             http_probes:     r.get(9).map_err(AppError::from)?,
             tls_probes:      r.get(10).map_err(AppError::from)?,
             script_results:  r.get(11).map_err(AppError::from)?,
+            dns_results:     r.get(12).map_err(AppError::from)?,
         });
     }
     drop(rows); // release borrow on stmt
@@ -239,6 +243,9 @@ fn load_hosts_for_session(
         }
         if let Some(v) = hr.script_results {
             h["script_results"] = serde_json::from_str(&v).unwrap_or(serde_json::json!([]));
+        }
+        if let Some(v) = hr.dns_results {
+            h["dnsResults"] = serde_json::from_str(&v).unwrap_or(serde_json::json!([]));
         }
 
         result.push(h);
@@ -302,47 +309,23 @@ fn load_tags_for_host(
 
 // ── Active session ────────────────────────────────────────────────────────────
 
-/// Persists the full working session atomically.
-/// Hosts not in the incoming list are deleted; hosts in the list are upserted.
+/// Persists the full working session. Deletes all existing hosts then re-inserts.
 pub fn save_active_session(
     conn: &rusqlite::Connection,
     hosts: &[serde_json::Value],
 ) -> Result<(), AppError> {
     ensure_session(conn, ACTIVE_SESSION_ID, "Active Session", "active")?;
 
-    // Remove hosts that are no longer in the session
-    let addresses: Vec<&str> = hosts
-        .iter()
-        .filter_map(|h| h["address"].as_str())
-        .collect();
-
-    if addresses.is_empty() {
-        conn.execute(
-            "DELETE FROM hosts WHERE session_id = ?1",
-            [ACTIVE_SESSION_ID],
-        )
-        .map_err(|e| AppError::DatabaseError(format!("delete all hosts: {e}")))?;
-    } else {
-        // Build a parameterised IN clause
-        let placeholders: Vec<String> =
-            (1..=addresses.len()).map(|i| format!("?{i}")).collect();
-        let sql = format!(
-            "DELETE FROM hosts WHERE session_id = '{ACTIVE_SESSION_ID}' AND address NOT IN ({})",
-            placeholders.join(",")
-        );
-        let mut stmt = conn.prepare(&sql).map_err(AppError::from)?;
-        // Pass addresses as params
-        for (i, addr) in addresses.iter().enumerate() {
-            stmt.raw_bind_parameter(i + 1, *addr).map_err(AppError::from)?;
-        }
-        stmt.raw_execute().map_err(AppError::from)?;
-    }
+    conn.execute(
+        "DELETE FROM hosts WHERE session_id = ?1",
+        [ACTIVE_SESSION_ID],
+    )
+    .map_err(|e| AppError::DatabaseError(format!("delete hosts: {e}")))?;
 
     for host in hosts {
         save_host(conn, ACTIVE_SESSION_ID, host)?;
     }
 
-    // Update session timestamp
     conn.execute(
         "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
         rusqlite::params![now_iso(), ACTIVE_SESSION_ID],

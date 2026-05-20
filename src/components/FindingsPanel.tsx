@@ -65,7 +65,7 @@ export function FindingsPanel({ sessionId, findings, onFindingsChange }: Props) 
       setCreating(false);
       setNewTitle(""); setNewSummary(""); setNewSev("medium");
       setSelectedId(id);
-    } catch { /* silently ignored */ } finally {
+    } catch (err) { console.error("[AegisMap] Finding create failed:", err); } finally {
       setSaving(false);
     }
   }
@@ -217,3 +217,4 @@ export function FindingsPanel({ sessionId, findings, onFindingsChange }: Props) 
     </div>
   );
 }
+      

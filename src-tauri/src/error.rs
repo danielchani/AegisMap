@@ -33,3 +33,9 @@ impl From<std::io::Error> for AppError {
         AppError::Io(e.to_string())
     }
 }
+
+impl From<serde_json::Error> for AppError {
+    fn from(e: serde_json::Error) -> Self {
+        AppError::DatabaseError(format!("JSON serialization error: {e}"))
+    }
+}

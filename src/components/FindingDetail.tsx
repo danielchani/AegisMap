@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { SLabel } from "./ui/SLabel";
 import { updateFinding, deleteFinding, listEvidence } from "../lib/findings";
 import type {
   PentestFinding, EvidenceItem, FindingStatus, FindingConfidence,
@@ -32,16 +33,6 @@ interface Props {
   onClose: () => void;
 }
 
-function SLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "9px", letterSpacing: "0.18em", color: "var(--text-dim)", marginBottom: "5px" }}>
-      <span style={{ color: "var(--accent)", opacity: 0.5 }}>◈</span>
-      {children}
-      <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
-    </div>
-  );
-}
-
 export function FindingDetail({ finding, onUpdate, onDelete, onClose }: Props) {
   const [editing, setEditing]   = useState(false);
   const [title,   setTitle]     = useState(finding.title);
@@ -67,7 +58,7 @@ export function FindingDetail({ finding, onUpdate, onDelete, onClose }: Props) {
       });
       onUpdate(finding.id, { title, summary, technicalDetails: details || undefined, remediation: remedy || undefined, status });
       setEditing(false);
-    } catch { /* silently ignored */ } finally {
+    } catch (err) { console.error("[AegisMap] Finding save failed:", err); } finally {
       setSaving(false);
     }
   }
@@ -77,7 +68,7 @@ export function FindingDetail({ finding, onUpdate, onDelete, onClose }: Props) {
     try {
       await updateFinding(finding.id, { status: s });
       onUpdate(finding.id, { status: s });
-    } catch { /* silently ignored */ }
+    } catch (err) { console.error("[AegisMap] Finding status update failed:", err); }
   }
 
   async function handleDelete() {

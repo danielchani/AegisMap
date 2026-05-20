@@ -26,3 +26,10 @@ src-tauri/gen/
 *.njsproj
 *.sln
 *.sw?
+
+# Claude Code AI assistant — development tooling, not part of the project
+.claude/
+CLAUDE.md
+
+# Temporary / scratch files
+src-tauri/icons/_temp_512.png

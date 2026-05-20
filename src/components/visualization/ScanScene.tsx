@@ -15,9 +15,16 @@ import { Html, Line, OrbitControls, Stars } from "@react-three/drei";
 import { getAdvisory } from "../../data/cveHints";
 import { getVersionAdvisory } from "../../data/knownVersions";
 import { hostRiskLevel, RISK_COLOR, RISK_LABEL } from "../../lib/riskScore";
-import type { HostResult, PortEntry, PortFamily, ScanReport, ScanStatus } from "../../types";
+import { portColor } from "../../lib/ports";
+import {
+  getDiffState, getDiffColor, getDiffOpacity, DIFF_BADGE,
+  getConfidenceTier, getConfidenceColor,
+  type DiffState,
+} from "../../lib/sceneMode";
+import type { HostResult, PentestFinding, PortEntry, PortFamily, ScanReport, ScanStatus, SceneMode } from "../../types";
 import { portFamily } from "../../types";
 import type { ProvisionalHost } from "../../hooks/useProvisionalHosts";
+import type { SessionDiffReport } from "../../lib/sessionDiff";
 
 // ── Shared geometry ────────────────────────────────────────────────────────────
 const GEO_HOST       = new THREE.SphereGeometry(0.32, 20, 20);
@@ -27,6 +34,7 @@ const GEO_RING_SEL   = new THREE.RingGeometry(0.50, 0.56, 48);
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const HOST_RADIUS  = 4.0;
+const GHOST_RADIUS = 7.2;   // outer ring for diff-removed ghost nodes
 const ORBIT_SPEED  = (Math.PI * 2) / 14;
 const PULSE_PERIOD = 3.6;
 const PULSE_MAX_R  = 7.2;
@@ -55,6 +63,13 @@ function hostPosition(idx: number, total: number): [number, number, number] {
   if (total <= 1) return [total === 0 ? 0 : HOST_RADIUS, 0, 0];
   const angle = (idx / total) * Math.PI * 2 - Math.PI / 2;
   return [Math.cos(angle) * HOST_RADIUS, 0, Math.sin(angle) * HOST_RADIUS];
+}
+
+/** Positions removed hosts on a separate outer ring to avoid layout collisions. */
+function ghostPosition(idx: number, total: number): [number, number, number] {
+  if (total <= 1) return [GHOST_RADIUS, 0, 0];
+  const angle = (idx / total) * Math.PI * 2 - Math.PI / 2;
+  return [Math.cos(angle) * GHOST_RADIUS, 0, Math.sin(angle) * GHOST_RADIUS];
 }
 
 /** Y elevation = open port count × 0.16, capped at 1.6 units. */
@@ -112,17 +127,6 @@ function subnetAwarePositions(hosts: HostResult[]): Map<string, [number, number,
     });
   }
   return result;
-}
-
-function portColor(port: number): string {
-  if ([22, 2222, 222].includes(port))                                  return "#4ade80";
-  if ([80, 443, 8080, 8443, 8000, 3000, 5000, 9000].includes(port))   return "#38bdf8";
-  if ([21, 20, 990].includes(port))                                    return "#a78bfa";
-  if ([25, 465, 587, 143, 993, 110, 995].includes(port))              return "#fbbf24";
-  if ([3306, 5432, 1433, 1521, 27017, 6379, 5984].includes(port))     return "#fb923c";
-  if ([53, 5353].includes(port))                                       return "#e879f9";
-  if ([445, 139, 135].includes(port))                                  return "#94a3b8";
-  return "#67e8f9";
 }
 
 /** Returns worst advisory severity across all open ports on a host. */
@@ -422,9 +426,12 @@ function HeartbeatRing() {
 const GLOW_RADIUS:  Record<string, number> = { clean: 0.30, low: 0.50, medium: 0.80, high: 1.10, critical: 1.55 };
 const GLOW_OPACITY: Record<string, number> = { clean: 0.07, low: 0.11, medium: 0.16, high: 0.22, critical: 0.30 };
 
-function RiskGlow({ x, z, risk }: { x: number; z: number; risk: string }) {
-  const col     = RISK_COLOR[risk as keyof typeof RISK_COLOR] ?? "#4ade80";
-  const radius  = GLOW_RADIUS[risk]  ?? 0.30;
+function RiskGlow({ x, z, risk, colorOverride, radiusOverride }: {
+  x: number; z: number; risk: string;
+  colorOverride?: string; radiusOverride?: number;
+}) {
+  const col     = colorOverride ?? (RISK_COLOR[risk as keyof typeof RISK_COLOR] ?? "#4ade80");
+  const radius  = radiusOverride ?? (GLOW_RADIUS[risk]  ?? 0.30);
   const opacity = GLOW_OPACITY[risk] ?? 0.07;
 
   return (
@@ -478,9 +485,9 @@ const WORKFLOW_COL: Record<string, string> = {
   vulnerable: "#f87171", mitigated:  "#6b7280",
 };
 
-function HostInfoCard({ host }: { host: HostResult }) {
+function HostInfoCard({ host, findings }: { host: HostResult; findings?: PentestFinding[] }) {
   const openPorts = useMemo(() => host.ports.filter(p => p.state === "open"), [host.ports]);
-  const risk    = hostRiskLevel(host);
+  const risk    = hostRiskLevel(host, findings);
   const riskCol = RISK_COLOR[risk];
 
   const cats = useMemo(() => [
@@ -634,9 +641,12 @@ function HostInfoCard({ host }: { host: HostResult }) {
 
 function HostNode({
   host, position, selected, onSelect, portFilter, subnetColor, showLabels = true,
+  sceneMode = "network", diffState = "none", confidenceOverall, findings,
 }: {
   host: HostResult; position: [number, number, number]; selected: boolean;
   onSelect: () => void; portFilter: PortFamily; subnetColor?: string; showLabels?: boolean;
+  sceneMode?: SceneMode; diffState?: DiffState; confidenceOverall?: number;
+  findings?: PentestFinding[];
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const matRef   = useRef<THREE.MeshStandardMaterial>(null);
@@ -646,11 +656,22 @@ function HostNode({
   const [spawned, setSpawned] = useState(false);
 
   const up   = host.status === "up";
-  const risk = hostRiskLevel(host);
+  const risk = hostRiskLevel(host, findings);
   const baseCol = up ? (subnetColor ?? RISK_COLOR[risk]) : "#f87171";
-  const col = host.workflowStatus === "vulnerable" ? "#f87171"
-             : host.workflowStatus === "mitigated"  ? "#4b5563"
-             : baseCol;
+  const networkCol = host.workflowStatus === "vulnerable" ? "#f87171"
+                   : host.workflowStatus === "mitigated"  ? "#4b5563"
+                   : baseCol;
+
+  // Mode-specific color
+  const col = sceneMode === "diff"
+    ? getDiffColor(diffState)
+    : sceneMode === "confidence"
+      ? getConfidenceColor(getConfidenceTier(confidenceOverall ?? 0))
+      : networkCol;
+
+  // Diff mode: dim unchanged hosts
+  const nodeOpacity = (sceneMode === "diff") ? getDiffOpacity(diffState) : 1.0;
+  const isTransparent = nodeOpacity < 1.0;
 
   const openPorts = useMemo(() => host.ports.filter(p => p.state === "open").slice(0, 8), [host.ports]);
   const nodeScale = 0.85 + Math.min(openPorts.length, 8) * 0.018;
@@ -692,6 +713,8 @@ function HostNode({
             color={selected ? "#e8fff4" : col}
             emissive={col}
             emissiveIntensity={selected ? 1.5 : 0.65}
+            transparent={isTransparent}
+            opacity={nodeOpacity}
           />
         </mesh>
         {selected && <HeartbeatRing />}
@@ -717,7 +740,7 @@ function HostNode({
       {spawned && <AdvisoryBadge host={host} />}
 
       {/* Holographic info card — selected only, positioned above the node */}
-      {selected && <HostInfoCard host={host} />}
+      {selected && <HostInfoCard host={host} findings={findings} />}
 
       {/* Label — LOD levels (suppressed by showLabels filter) */}
       {showLabels && labelMode !== "none" && (
@@ -729,13 +752,20 @@ function HostNode({
             padding: "2px 7px",
             border: `1px solid ${selected ? "rgba(255,255,255,0.3)" : col + "33"}`,
             whiteSpace: "nowrap",
+            opacity: nodeOpacity < 1 ? 0.55 : 1,
           }}>
+            {sceneMode === "diff" && DIFF_BADGE[diffState] && (
+              <span style={{ marginRight: "4px", color: col }}>{DIFF_BADGE[diffState]}</span>
+            )}
             {host.address}
             {labelMode === "full" && host.hostname && (
               <span style={{ opacity: 0.45, fontSize: "9px", marginLeft: "5px" }}>{host.hostname}</span>
             )}
+            {sceneMode === "confidence" && labelMode === "full" && (
+              <span style={{ opacity: 0.65, fontSize: "9px", marginLeft: "5px" }}>[{confidenceOverall ?? 0}%]</span>
+            )}
           </div>
-          {labelMode === "full" && (
+          {labelMode === "full" && sceneMode === "network" && (
             <div style={{ marginTop: "2px", fontSize: "9px", fontFamily: "monospace", textAlign: "center", color: col + "77" }}>
               {openPorts.length > 0 ? `${openPorts.length} open · ${risk}` : host.status}
             </div>
@@ -784,6 +814,62 @@ function ProvisionalNode({ host, idx, total }: { host: ProvisionalHost; idx: num
         </div>
       </Html>
     </group>
+  );
+}
+
+// ── DiffGhostNode ─────────────────────────────────────────────────────────────
+// Semi-transparent ghost for hosts that existed in the baseline but are now gone.
+
+function DiffGhostNode({ host, position }: { host: HostResult; position: [number, number, number] }) {
+  const groupRef = useRef<THREE.Group>(null);
+  const spawnT   = useRef(0);
+  useFrame((_, delta) => {
+    if (!groupRef.current) return;
+    if (spawnT.current < 1) {
+      spawnT.current = Math.min(1, spawnT.current + delta * 1.8);
+      groupRef.current.scale.setScalar(easeOut(spawnT.current));
+    }
+  });
+  return (
+    <group position={position}>
+      <group ref={groupRef} scale={0}>
+        <mesh geometry={GEO_HOST}>
+          <meshStandardMaterial color="#475569" emissive="#1e293b" emissiveIntensity={0.5}
+            transparent opacity={0.35} />
+        </mesh>
+        {/* Dashed ring to distinguish from live nodes */}
+        <mesh geometry={GEO_RING_SEL} rotation={[-Math.PI / 2, 0, 0]} scale={[1.1, 1, 1.1]}>
+          <meshBasicMaterial color="#475569" transparent opacity={0.4} side={THREE.DoubleSide} />
+        </mesh>
+      </group>
+      <Html position={[0, 0.72, 0]} center distanceFactor={9} zIndexRange={[8, 0]} style={{ pointerEvents: "none" }}>
+        <div style={{
+          fontSize: "10px", fontFamily: "monospace",
+          color: "rgba(71,85,105,0.8)", background: "rgba(2,11,24,0.88)",
+          padding: "1px 6px", border: "1px solid rgba(71,85,105,0.3)",
+          whiteSpace: "nowrap", letterSpacing: "0.04em",
+        }}>
+          ⊖ {host.address}
+        </div>
+      </Html>
+    </group>
+  );
+}
+
+// ── ConfidenceRing ────────────────────────────────────────────────────────────
+// Partial arc ring showing reconnaissance completeness (0–100%).
+
+function ConfidenceRing({ overall, color, position }: {
+  overall: number; color: string; position: [number, number, number];
+}) {
+  const geo = useMemo(
+    () => new THREE.RingGeometry(0.44, 0.49, 48, 1, 0, Math.max(0.01, (overall / 100) * Math.PI * 2)),
+    [overall],
+  );
+  return (
+    <mesh geometry={geo} position={[position[0], position[1] + 0.45, position[2]]} rotation={[-Math.PI / 2, 0, 0]}>
+      <meshBasicMaterial color={color} transparent opacity={0.8} side={THREE.DoubleSide} />
+    </mesh>
   );
 }
 
@@ -861,6 +947,12 @@ interface ScanSceneProps {
   showLabels?: boolean;
   showConnections?: boolean;
   visibleRiskLevels?: Set<string>;
+  sceneMode?: SceneMode;
+  diffReport?: SessionDiffReport | null;
+  diffRemovedHosts?: HostResult[];
+  visibleDiffStates?: Set<string>;
+  confidenceMap?: Map<string, number>;
+  findings?: PentestFinding[];
 }
 
 export function ScanScene({
@@ -869,18 +961,35 @@ export function ScanScene({
   showLabels = true,
   showConnections = true,
   visibleRiskLevels,
+  sceneMode = "network",
+  diffReport = null,
+  diffRemovedHosts = [],
+  visibleDiffStates,
+  confidenceMap,
+  findings,
 }: ScanSceneProps) {
   const running   = status === "starting" || status === "running";
   const allHosts  = report?.hosts ?? [];
-  // Apply risk-level filter — hidden hosts stay in the data but leave the scene
-  const authHosts = visibleRiskLevels
-    ? allHosts.filter(h => visibleRiskLevels.has(hostRiskLevel(h)))
+  // Apply risk-level filter (network mode only) — hidden hosts stay in data but leave scene
+  const authHosts = (sceneMode === "network" && visibleRiskLevels)
+    ? allHosts.filter(h => visibleRiskLevels.has(hostRiskLevel(h, findings)))
     : allHosts;
+  // In diff mode: further filter by visible diff states
+  const filteredHosts = (sceneMode === "diff" && visibleDiffStates)
+    ? authHosts.filter(h => {
+        const state = getDiffState(h.address, diffReport);
+        return visibleDiffStates.has(state === "none" ? "added" : state);
+      })
+    : authHosts;
   const showProv  = running && authHosts.length === 0;
 
-  const positions    = useMemo(() => subnetAwarePositions(authHosts), [authHosts]);
-  const zones        = useMemo(() => subnetZones(authHosts), [authHosts]);
-  const subnetColors = useMemo(() => subnetColorMap(authHosts), [authHosts]);
+  const positions    = useMemo(() => subnetAwarePositions(filteredHosts), [filteredHosts]);
+  const ghostPositions = useMemo(
+    () => diffRemovedHosts.map((_, i) => ghostPosition(i, diffRemovedHosts.length)),
+    [diffRemovedHosts],
+  );
+  const zones        = useMemo(() => subnetZones(filteredHosts), [filteredHosts]);
+  const subnetColors = useMemo(() => subnetColorMap(filteredHosts), [filteredHosts]);
   const cameraTarget = selectedHost ? (positions.get(selectedHost.address) ?? null) : null;
 
   return (
@@ -903,15 +1012,22 @@ export function ScanScene({
       <Stars radius={100} depth={70} count={1600} factor={2.5} saturation={0.1} fade />
       <SceneGrid />
 
-      {/* Risk floor glow — one disc per host, z-projected to grid level */}
-      {authHosts.map(h => {
+      {/* Floor glow — risk in network mode; diff/confidence color in other modes */}
+      {filteredHosts.map(h => {
         const pos  = positions.get(h.address) ?? ([0, 0, 0] as [number, number, number]);
-        const risk = hostRiskLevel(h);
-        return <RiskGlow key={`glow-${h.address}`} x={pos[0]} z={pos[2]} risk={risk} />;
+        const risk = hostRiskLevel(h, findings);
+        const glowColor = sceneMode === "diff"
+          ? getDiffColor(getDiffState(h.address, diffReport))
+          : sceneMode === "confidence"
+            ? getConfidenceColor(getConfidenceTier(confidenceMap?.get(h.address) ?? 0))
+            : undefined;
+        const glowRadius = sceneMode === "diff" ? 0.55 : undefined;
+        return <RiskGlow key={`glow-${h.address}`} x={pos[0]} z={pos[2]} risk={risk}
+          colorOverride={glowColor} radiusOverride={glowRadius} />;
       })}
 
-      {/* Subnet zone boundaries */}
-      {zones.map(z => (
+      {/* Subnet zone boundaries (network mode only — avoid clutter in diff/confidence) */}
+      {sceneMode === "network" && zones.map(z => (
         <SubnetZone key={z.label} label={z.label} center={z.center} radius={z.radius} color={z.color} />
       ))}
 
@@ -933,12 +1049,17 @@ export function ScanScene({
           dashed dashSize={0.28} gapSize={0.18}
         />
       ))}
-      {showConnections && authHosts.map(h => {
+      {showConnections && filteredHosts.map(h => {
         const sel  = selectedHost?.address === h.address;
-        const risk = hostRiskLevel(h);
-        const col  = subnetColors.size > 1
+        const risk = hostRiskLevel(h, findings);
+        const networkCol = subnetColors.size > 1
           ? (subnetColors.get(h.address) ?? RISK_COLOR[risk])
           : (h.status === "up" ? RISK_COLOR[risk] : "#f87171");
+        const col = sceneMode === "diff"
+          ? getDiffColor(getDiffState(h.address, diffReport))
+          : sceneMode === "confidence"
+            ? getConfidenceColor(getConfidenceTier(confidenceMap?.get(h.address) ?? 0))
+            : networkCol;
         const pos = positions.get(h.address) ?? ([0, 0, 0] as [number, number, number]);
         return (
           <ConnectionLine key={`al-${h.address}`}
@@ -955,7 +1076,7 @@ export function ScanScene({
       ))}
 
       {/* Authoritative hosts */}
-      {authHosts.map(h => (
+      {filteredHosts.map(h => (
         <HostNode key={h.address}
           host={h}
           position={positions.get(h.address) ?? [0, 0, 0]}
@@ -964,8 +1085,33 @@ export function ScanScene({
           portFilter={portFilter}
           subnetColor={subnetColors.size > 1 ? subnetColors.get(h.address) : undefined}
           showLabels={showLabels}
+          sceneMode={sceneMode}
+          diffState={getDiffState(h.address, diffReport)}
+          confidenceOverall={confidenceMap?.get(h.address)}
+          findings={findings}
         />
       ))}
+
+      {/* Diff mode: ghost nodes for removed hosts */}
+      {sceneMode === "diff" && (!visibleDiffStates || visibleDiffStates.has("removed")) &&
+        diffRemovedHosts.map((h, i) => (
+          <DiffGhostNode key={`ghost-${h.address}`} host={h} position={ghostPositions[i] ?? [0, 0, 0]} />
+        ))
+      }
+
+      {/* Confidence mode: arc rings showing completeness */}
+      {sceneMode === "confidence" && filteredHosts.map(h => {
+        const pos     = positions.get(h.address) ?? ([0, 0, 0] as [number, number, number]);
+        const overall = confidenceMap?.get(h.address) ?? 0;
+        const tier    = getConfidenceTier(overall);
+        return (
+          <ConfidenceRing key={`conf-${h.address}`}
+            overall={overall}
+            color={getConfidenceColor(tier)}
+            position={[pos[0], pos[1], pos[2]]}
+          />
+        );
+      })}
 
       {/* Camera rig + presets */}
       <CameraRig targetPos={cameraTarget} />

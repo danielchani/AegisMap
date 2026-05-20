@@ -11,7 +11,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  PentestFinding, EvidenceItem, FindingSeverity,
+  PentestFinding, EvidenceItem, FindingSeverity, LiveCveEntry,
 } from "../types";
 
 // ── CRUD wrappers ─────────────────────────────────────────────────────────────
@@ -176,6 +176,62 @@ export async function createFindingFromScript(ctx: ScriptContext): Promise<strin
     portRef:     ctx.portRef,
     excerpt:     ctx.scriptOutput.slice(0, 300),
     rawData:     JSON.stringify({ scriptId: ctx.scriptId, output: ctx.scriptOutput }),
+  });
+
+  return findingId;
+}
+
+interface LiveCveContext {
+  sessionId: string;
+  hostAddress: string;
+  portRef: string;
+  entry: LiveCveEntry;
+  detectedProduct: string;
+  detectedVersion?: string;
+}
+
+/** Creates a finding from a live NVD CVE result. confidence is always "candidate". */
+export async function createFindingFromLiveCve(ctx: LiveCveContext): Promise<string> {
+  const score = ctx.entry.cvssV3Score ?? ctx.entry.cvssV2Score ?? 0;
+  const severity = cvssToSeverity(score);
+
+  const findingId = await createFinding({
+    sessionId:     ctx.sessionId,
+    title:         `${ctx.entry.cveId} — ${ctx.detectedProduct}`,
+    severity,
+    confidence:    "candidate",
+    status:        "draft",
+    affectedHosts: [ctx.hostAddress],
+    affectedPorts: [ctx.portRef],
+    summary:       ctx.entry.description.slice(0, 500) ||
+                   `${ctx.detectedProduct} matched ${ctx.entry.cveId}.`,
+    references:    [ctx.entry.cveId, ...ctx.entry.references].slice(0, 5),
+    source:        "cve_candidate",
+    sourceRef:     ctx.entry.cveId,
+  });
+
+  await attachEvidence({
+    findingId,
+    sessionId:   ctx.sessionId,
+    type:        "advisory_match",
+    hostAddress: ctx.hostAddress,
+    portRef:     ctx.portRef,
+    excerpt:     [
+      `${ctx.entry.cveId}`,
+      `CVSS: ${ctx.entry.cvssV3Score?.toFixed(1) ?? ctx.entry.cvssV2Score?.toFixed(1) ?? "n/a"}`,
+      ctx.entry.cvssV3Severity ? `Severity: ${ctx.entry.cvssV3Severity}` : "",
+      `Published: ${ctx.entry.published.slice(0, 10)}`,
+    ].filter(Boolean).join(" · "),
+    rawData: JSON.stringify({
+      cveId: ctx.entry.cveId,
+      cvssV3Score: ctx.entry.cvssV3Score,
+      cvssV3Severity: ctx.entry.cvssV3Severity,
+      cvssV2Score: ctx.entry.cvssV2Score,
+      published: ctx.entry.published,
+      detectedProduct: ctx.detectedProduct,
+      detectedVersion: ctx.detectedVersion,
+      references: ctx.entry.references,
+    }),
   });
 
   return findingId;

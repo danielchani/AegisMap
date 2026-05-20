@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use crate::db::DbConn;
 use crate::error::AppError;
+use crate::intelligence::cve::{CveFetchResult, CveRateState, CveRateStatus};
+use crate::intelligence::dns::{DnsQueryRequest, DnsQueryResult};
 use crate::intelligence::http::{HttpProbeRequest, HttpProbeResult};
 use crate::intelligence::tls::{TlsProbeRequest, TlsProbeResult};
 use crate::models::ScanRequest;
@@ -80,6 +82,23 @@ pub async fn probe_tls(request: TlsProbeRequest) -> Result<TlsProbeResult, AppEr
         return Err(AppError::InvalidTarget("timeout_secs must be 1–30".into()));
     }
     Ok(crate::intelligence::tls::probe(request).await)
+}
+
+/// Performs opt-in DNS enrichment for a single IP or hostname.
+/// PTR, A/AAAA, CNAME, MX, NS, TXT.  Network/resolution errors are embedded
+/// in `result.error`; only validation errors (CIDR, bad timeout) propagate as `Err`.
+#[tauri::command]
+pub async fn dns_query(request: DnsQueryRequest) -> Result<DnsQueryResult, AppError> {
+    validation::validate_target(&request.address)?;
+    if request.address.contains('/') {
+        return Err(AppError::InvalidTarget(
+            "DNS query requires a single host, not a CIDR range".into(),
+        ));
+    }
+    if request.timeout_secs == 0 || request.timeout_secs > 30 {
+        return Err(AppError::InvalidTarget("timeout_secs must be 1–30".into()));
+    }
+    Ok(crate::intelligence::dns::query(request).await)
 }
 
 // ── Session persistence commands ────────────────────────────────────────────────
@@ -228,6 +247,9 @@ pub fn verify_audit_chain(
 #[tauri::command]
 pub fn clear_audit_log(db: tauri::State<'_, DbConn>) -> Result<(), AppError> {
     let conn = db.lock().unwrap();
+    // Log the clear action before wiping — this entry will be removed too,
+    // but it creates a record in any external log sinks and shows intent.
+    crate::db_audit::append_entry(&conn, "AUDIT_CLEAR", "Audit log cleared by user").ok();
     crate::db_audit::clear(&conn)
 }
 
@@ -317,4 +339,127 @@ pub fn list_evidence_for_finding(
 ) -> Result<Vec<serde_json::Value>, AppError> {
     let conn = db.lock().unwrap();
     crate::db_findings::list_evidence_for_finding(&conn, &finding_id)
+}
+
+// ── Live CVE lookup commands ──────────────────────────────────────────────────
+
+/// Fetch CVEs from the NVD API for a product keyword.
+/// Checks the SQLite cache first (24 h TTL). Enforces server-side rate limits.
+/// Confidence is always "candidate" — the frontend must not auto-confirm.
+#[tauri::command]
+pub async fn fetch_live_cves(
+    db: tauri::State<'_, DbConn>,
+    rate_state: tauri::State<'_, Arc<CveRateState>>,
+    product: String,
+    version: Option<String>,
+) -> Result<CveFetchResult, AppError> {
+    use crate::intelligence::cve;
+
+    let product = cve::validate_product_name(&product)?.to_string();
+
+    // Normalised cache key: lowercase product (version not included so one cache
+    // entry covers all versions of a product)
+    let cache_key = product.to_ascii_lowercase();
+
+    // Serve from cache if fresh
+    {
+        let conn = db.lock().unwrap();
+        if let Some(cached) = cve::cache_get(&conn, &cache_key) {
+            return Ok(cached);
+        }
+    }
+
+    // Enforce rate limit before making a live request
+    let api_key_opt: Option<String> = {
+        let conn = db.lock().unwrap();
+        cve::get_nvd_key(&conn)
+    };
+    let has_key = api_key_opt.is_some();
+    let wait_ms = rate_state.check_and_claim(has_key);
+    if wait_ms > 0 {
+        return Err(AppError::PersistenceError(format!(
+            "RATE_LIMIT:{}",
+            wait_ms
+        )));
+    }
+
+    // Build keyword: "product version" if version provided, else just product
+    let keyword = match &version {
+        Some(v) if !v.trim().is_empty() => {
+            let v = v.trim();
+            // Validate version string (same char-set as product)
+            cve::validate_product_name(v)?;
+            format!("{} {}", product, v)
+        }
+        _ => product.clone(),
+    };
+
+    let (entries, total) = cve::fetch_from_nvd(&keyword, api_key_opt.as_deref()).await?;
+
+    // Store in cache
+    let fetched_at;
+    let expires_at;
+    {
+        let conn = db.lock().unwrap();
+        cve::cache_put(&conn, &cache_key, &entries, total)?;
+        // Re-read to get the stored timestamps
+        let cached = cve::cache_get(&conn, &cache_key).unwrap_or_else(|| CveFetchResult {
+            product_key: cache_key.clone(),
+            entries: entries.clone(),
+            fetched_at: chrono::Utc::now().to_rfc3339(),
+            expires_at: chrono::Utc::now().to_rfc3339(),
+            from_cache: false,
+            total_available: total,
+        });
+        fetched_at = cached.fetched_at;
+        expires_at = cached.expires_at;
+    }
+
+    Ok(CveFetchResult {
+        product_key: cache_key,
+        entries,
+        fetched_at,
+        expires_at,
+        from_cache: false,
+        total_available: total,
+    })
+}
+
+/// Returns how many milliseconds until the next CVE fetch is allowed (0 = ready).
+#[tauri::command]
+pub fn cve_rate_status(
+    db: tauri::State<'_, DbConn>,
+    rate_state: tauri::State<'_, Arc<CveRateState>>,
+) -> CveRateStatus {
+    let conn = db.lock().unwrap();
+    let api_key = crate::intelligence::cve::get_nvd_key(&conn);
+    let has_api_key = api_key.is_some();
+    CveRateStatus {
+        millis_until_ready: rate_state.millis_until_ready(has_api_key),
+        has_api_key,
+    }
+}
+
+/// Stores (or clears) the NVD API key in the settings table.
+/// Pass `None` or omit to remove the key.
+#[tauri::command]
+pub fn set_nvd_api_key(
+    db: tauri::State<'_, DbConn>,
+    key: Option<String>,
+) -> Result<(), AppError> {
+    use crate::intelligence::cve;
+    if let Some(ref k) = key {
+        if !k.is_empty() {
+            cve::validate_api_key(k)?;
+        }
+    }
+    let conn = db.lock().unwrap();
+    cve::set_nvd_key(&conn, key.as_deref().filter(|k| !k.is_empty()))
+}
+
+/// Returns whether an NVD API key is configured (does not return the key itself).
+#[tauri::command]
+pub fn get_nvd_api_key_status(db: tauri::State<'_, DbConn>) -> bool {
+    let conn = db.lock().unwrap();
+    crate::intelligence::cve::get_nvd_key(&conn).is_some()
 }

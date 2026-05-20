@@ -1,0 +1,76 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#061420"/>
+      <stop offset="100%" stop-color="#020b18"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#00ffaa" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#00cc88" stop-opacity="0.7"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="40%" r="50%">
+      <stop offset="0%" stop-color="#00ffaa" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#00ffaa" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="nodeGlow">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="shieldGlow">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+
+  <!-- Subtle glow -->
+  <circle cx="256" cy="220" r="180" fill="url(#glow)"/>
+
+  <!-- Outer ring -->
+  <circle cx="256" cy="256" r="210" stroke="#00ffaa" stroke-width="1.5" stroke-opacity="0.1" fill="none"/>
+  <circle cx="256" cy="256" r="195" stroke="#00ffaa" stroke-width="0.8" stroke-opacity="0.06" fill="none"/>
+
+  <!-- Shield body -->
+  <path d="M256 72 L384 124 L384 268 Q384 368 256 432 Q128 368 128 268 L128 124 Z"
+        stroke="url(#shield)" stroke-width="4" fill="rgba(0,255,170,0.04)" filter="url(#shieldGlow)"/>
+
+  <!-- Inner shield accent line -->
+  <path d="M256 100 L362 142 L362 262 Q362 348 256 404 Q150 348 150 262 L150 142 Z"
+        stroke="#00ffaa" stroke-width="1" stroke-opacity="0.12" fill="none"/>
+
+  <!-- Network connection lines -->
+  <line x1="256" y1="180" x2="196" y2="290" stroke="#00ffaa" stroke-width="2" stroke-opacity="0.3"/>
+  <line x1="256" y1="180" x2="316" y2="290" stroke="#00ffaa" stroke-width="2" stroke-opacity="0.3"/>
+  <line x1="196" y1="290" x2="316" y2="290" stroke="#38bdf8" stroke-width="1.5" stroke-opacity="0.25"/>
+  <line x1="196" y1="290" x2="256" y2="350" stroke="#00ffaa" stroke-width="1.5" stroke-opacity="0.2"/>
+  <line x1="316" y1="290" x2="256" y2="350" stroke="#00ffaa" stroke-width="1.5" stroke-opacity="0.2"/>
+  <line x1="256" y1="180" x2="256" y2="350" stroke="#00ffaa" stroke-width="1" stroke-opacity="0.1"/>
+
+  <!-- Network nodes -->
+  <!-- Top node (primary) -->
+  <circle cx="256" cy="180" r="18" fill="#00ffaa" opacity="0.15"/>
+  <circle cx="256" cy="180" r="10" fill="#00ffaa" opacity="0.9" filter="url(#nodeGlow)"/>
+
+  <!-- Left node -->
+  <circle cx="196" cy="290" r="14" fill="#38bdf8" opacity="0.12"/>
+  <circle cx="196" cy="290" r="7" fill="#38bdf8" opacity="0.8" filter="url(#nodeGlow)"/>
+
+  <!-- Right node -->
+  <circle cx="316" cy="290" r="14" fill="#38bdf8" opacity="0.12"/>
+  <circle cx="316" cy="290" r="7" fill="#38bdf8" opacity="0.8" filter="url(#nodeGlow)"/>
+
+  <!-- Bottom node -->
+  <circle cx="256" cy="350" r="11" fill="#00ffaa" opacity="0.1"/>
+  <circle cx="256" cy="350" r="5.5" fill="#00ffaa" opacity="0.6" filter="url(#nodeGlow)"/>
+
+  <!-- Center small accent node -->
+  <circle cx="256" cy="260" r="3" fill="#00ffaa" opacity="0.4"/>
+</svg>

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas";
 import { invoke } from "@tauri-apps/api/core";
-const MAX_PORT_HISTORY = 10;
 import { NmapStatusBar } from "./components/NmapStatusBar";
 import { PanelTabs } from "./components/PanelTabs";
 import { ScannerPanel } from "./components/ScannerPanel";
@@ -12,46 +11,16 @@ import { ScanScene } from "./components/visualization/ScanScene";
 import { useProvisionalHosts } from "./hooks/useProvisionalHosts";
 import { appendAudit } from "./lib/auditLog";
 import { listFindings } from "./lib/findings";
-import type { HostResult, PentestFinding, PortEntry, PortFamily, ScanReport, ScanStatus } from "./types";
+import { calculateConfidence } from "./lib/fingerprint";
+import { diffSessions } from "./lib/sessionDiff";
+import { mergeHost } from "./lib/mergeHosts";
+import type { HostResult, PentestFinding, PortFamily, ScanReport, ScanStatus, SceneMode } from "./types";
+import type { SessionDiffReport } from "./lib/sessionDiff";
 import type { PanelTab } from "./stores/uiStore";
 import "./App.css";
 
 // ── Scope config key (stays in localStorage; no history needed) ──────────────
 const SCOPE_KEY = "aegismap:scope";
-
-// ── Port/host merge logic ──────────────────────────────────────────────────────
-
-function mergePorts(old: PortEntry[], incoming: PortEntry[]): PortEntry[] {
-  const map = new Map<string, PortEntry>();
-  old.forEach((p) => map.set(`${p.port}/${p.protocol}`, p));
-  incoming.forEach((p) => map.set(`${p.port}/${p.protocol}`, p));
-  return Array.from(map.values()).sort((a, b) => a.port - b.port);
-}
-
-function mergeHost(existing: HostResult, incoming: HostResult): HostResult {
-  const prevOpen = new Set(existing.ports.filter((p) => p.state === "open").map((p) => p.port));
-  const nextOpen = new Set(incoming.ports.filter((p) => p.state === "open").map((p) => p.port));
-  const openCount = nextOpen.size;
-  const history = [
-    ...(existing.portHistory ?? []),
-    { ts: new Date().toISOString(), open: openCount },
-  ].slice(-MAX_PORT_HISTORY);
-
-  return {
-    ...incoming,
-    ports:          mergePorts(existing.ports, incoming.ports),
-    scannedAt:      new Date().toISOString(),
-    notes:          existing.notes,
-    workflowStatus: existing.workflowStatus,
-    tags:           existing.tags,
-    portNotes:      existing.portNotes,
-    portHistory:    history,
-    portsDiff: {
-      added:   [...nextOpen].filter((p) => !prevOpen.has(p)),
-      removed: [...prevOpen].filter((p) => !nextOpen.has(p)),
-    },
-  };
-}
 
 // ── App ────────────────────────────────────────────────────────────────────────
 
@@ -69,6 +38,31 @@ export default function App() {
   });
   const [storageError, setStorageError] = useState<string | null>(null);
   const [findings,     setFindings]     = useState<PentestFinding[]>([]);
+
+  // ── Scene mode state (diff + confidence) ────────────────────────────────────
+  const [sceneMode,        setSceneMode]        = useState<SceneMode>("network");
+  const [diffBaseline,     setDiffBaseline]     = useState<HostResult[] | null>(null);
+  const [diffBaselineName, setDiffBaselineName] = useState<string>("");
+  const [visibleDiffStates, setVisibleDiffStates] = useState<Set<string>>(
+    new Set(["added", "removed", "changed", "unchanged"]),
+  );
+
+  const diffReport = useMemo<SessionDiffReport | null>(
+    () => (diffBaseline ? diffSessions(diffBaseline, sessionHosts) : null),
+    [diffBaseline, sessionHosts],
+  );
+
+  const diffRemovedHosts = useMemo<HostResult[]>(() => {
+    if (!diffReport || !diffBaseline) return [];
+    const removed = new Set(diffReport.diffs.filter((d) => d.type === "removed").map((d) => d.address));
+    return diffBaseline.filter((h) => removed.has(h.address));
+  }, [diffReport, diffBaseline]);
+
+  const confidenceMap = useMemo<Map<string, number>>(() => {
+    const m = new Map<string, number>();
+    sessionHosts.forEach((h) => m.set(h.address, calculateConfidence(h).overall));
+    return m;
+  }, [sessionHosts]);
 
   // ── New UI state ─────────────────────────────────────────────────────────────
   const [activeTab,        setActiveTab]        = useState<PanelTab>("scan");
@@ -114,7 +108,7 @@ export default function App() {
             localStorage.removeItem("aegismap:session");
             localStorage.removeItem("aegismap:saved-sessions");
             localStorage.removeItem("aegismap:audit");
-          } catch { /* non-critical */ }
+          } catch (err) { console.error("[AegisMap] Legacy migration failed:", err); }
         }
       }
 
@@ -125,6 +119,13 @@ export default function App() {
       // Load findings for the active session
       const loadedFindings = await listFindings("active").catch(() => []);
       if (loadedFindings.length > 0) setFindings(loadedFindings);
+
+      // Dismiss splash screen
+      const splash = document.getElementById("aegis-splash");
+      if (splash) {
+        splash.classList.add("fade-out");
+        setTimeout(() => splash.remove(), 500);
+      }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -132,7 +133,10 @@ export default function App() {
   // Persist active session to SQLite whenever it changes (debounced via setTimeout).
   useEffect(() => {
     const t = setTimeout(() => {
-      void invoke("save_active_session", { hosts: sessionHosts }).catch(() => {});
+      void invoke("save_active_session", { hosts: sessionHosts }).catch((err) => {
+        console.error("[AegisMap] Session persist failed:", err);
+        setStorageError("Session could not be saved — changes may not persist across restarts.");
+      });
     }, 200);
     return () => clearTimeout(t);
   }, [sessionHosts]);
@@ -168,10 +172,10 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.key === "e") { e.preventDefault(); window.dispatchEvent(new CustomEvent("aegismap:export")); }
       if ((e.ctrlKey || e.metaKey) && e.key === "p") { e.preventDefault(); handlePrint(); }
       if (!inInput && e.key === "Delete" && selectedAddr) handleRemoveHost(selectedAddr);
-      // Tab switching: Ctrl+1-4
-      if ((e.ctrlKey || e.metaKey) && e.key >= "1" && e.key <= "4") {
+      // Tab switching: Ctrl+1-5
+      if ((e.ctrlKey || e.metaKey) && e.key >= "1" && e.key <= "5") {
         e.preventDefault();
-        const tabs: PanelTab[] = ["scan", "results", "inspect", "audit"];
+        const tabs: PanelTab[] = ["scan", "results", "inspect", "findings", "audit"];
         setActiveTab(tabs[parseInt(e.key) - 1]);
       }
     };
@@ -225,9 +229,16 @@ export default function App() {
   const selectedHost = useMemo(() => sessionHosts.find((h) => h.address === selectedAddr) ?? null, [sessionHosts, selectedAddr]);
 
   const displayReport = useMemo<ScanReport | null>(() => {
-    if (!latestReport && sessionHosts.length === 0) return null;
-    if (!latestReport) return null;
-    return { ...latestReport, hosts: sessionHosts };
+    if (sessionHosts.length === 0 && !latestReport) return null;
+    // When hosts exist but no scan has been run yet (e.g. loaded session,
+    // app restart with persisted data), synthesize a minimal report wrapper
+    // so the 3D scene, results table, and print report all render correctly.
+    const base = latestReport ?? {
+      target: "session",
+      profile: "quick_common_ports" as ScanReport["profile"],
+      hosts: [],
+    };
+    return { ...base, hosts: sessionHosts };
   }, [latestReport, sessionHosts]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -277,6 +288,7 @@ export default function App() {
       hosts.forEach((h) => { const ex = map.get(h.address); map.set(h.address, ex ? mergeHost(ex, h) : h); });
       return Array.from(map.values());
     });
+    setActiveTab("results");
     void appendAudit("SESSION_LOAD", `Merged ${hosts.length} host(s) from saved session`);
   }, []);
 
@@ -296,6 +308,31 @@ export default function App() {
       else next.add(level);
       return next;
     });
+  }, []);
+
+  const handleLoadDiffBaseline = useCallback(async (id: string, name: string) => {
+    try {
+      const hosts = await invoke<HostResult[]>("load_named_session", { id });
+      setDiffBaseline(hosts);
+      setDiffBaselineName(name);
+    } catch (err) { console.error("[AegisMap] Failed to load diff baseline:", err); }
+  }, []);
+
+  const handleToggleDiffState = useCallback((state: string) => {
+    setVisibleDiffStates((prev) => {
+      const next = new Set(prev);
+      if (next.has(state)) next.delete(state);
+      else next.add(state);
+      return next;
+    });
+  }, []);
+
+  const handleSceneModeChange = useCallback((mode: SceneMode) => {
+    setSceneMode(mode);
+    if (mode !== "diff") {
+      setDiffBaseline(null);
+      setDiffBaselineName("");
+    }
   }, []);
 
   return (
@@ -343,7 +380,7 @@ export default function App() {
             {sessionHosts.length} HOST{sessionHosts.length !== 1 ? "S" : ""}
           </div>
         )}
-        <SessionManager currentHosts={sessionHosts} onLoad={handleLoadSession} />
+        <SessionManager currentHosts={sessionHosts} onLoad={handleLoadSession} onNewSession={handleClearSession} />
         <div style={{ fontSize: "9px", color: "var(--text-dim)", letterSpacing: "0.12em", display: "flex", alignItems: "center", gap: "6px" }}>
           <span style={{ color: "var(--border-hi)" }}>◈</span>NETWORK RECON v0.1
         </div>
@@ -400,7 +437,7 @@ export default function App() {
 
           {/* Keyboard hints footer */}
           <div className="no-print" style={{ padding: "4px 10px", fontSize: "7px", color: "var(--text-dim)", letterSpacing: "0.08em", borderTop: "1px solid var(--border)", flexShrink: 0 }}>
-            Ctrl+K target · Ctrl+1-4 tabs · Ctrl+E export · Ctrl+P pdf · Esc deselect · Del remove
+            Ctrl+K target · Ctrl+1-5 tabs · Ctrl+E export · Ctrl+P pdf · Esc deselect · Del remove
           </div>
         </div>
 
@@ -421,6 +458,14 @@ export default function App() {
             showConnections={showConnections}
             onToggleConnections={() => setShowConnections((v) => !v)}
             hostCount={sessionHosts.length}
+            sceneMode={sceneMode}
+            onSceneModeChange={handleSceneModeChange}
+            diffReport={diffReport}
+            diffBaselineName={diffBaselineName}
+            onLoadDiffBaseline={handleLoadDiffBaseline}
+            visibleDiffStates={visibleDiffStates}
+            onToggleDiffState={handleToggleDiffState}
+            confidenceMap={confidenceMap}
           />
 
           {/* Screenshot button */}
@@ -452,6 +497,12 @@ export default function App() {
             showLabels={showLabels}
             showConnections={showConnections}
             visibleRiskLevels={visibleRiskLevels}
+            sceneMode={sceneMode}
+            diffReport={diffReport}
+            diffRemovedHosts={diffRemovedHosts}
+            visibleDiffStates={visibleDiffStates}
+            confidenceMap={confidenceMap}
+            findings={findings}
           />
         </div>
       </main>
